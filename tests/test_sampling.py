@@ -16,6 +16,12 @@ Three checks:
   3. the Euler loop driven by a fake network -- exact against
      comfy.k_diffusion.sampling.sample_euler wrapped the way ComfyUI wraps it
      (CONST.calculate_denoised inside, to_d outside)
+  4. the same for DPM-Solver++(2M), which the edit path uses
+
+Check 4 was added late, after an edit came out covered in speckles and a
+wrong multistep coefficient was the first suspect. It was not the cause -- but
+the sampler had shipped without a test, which is how it got to be a suspect at
+all. Anything the edit path depends on gets one now.
 """
 from __future__ import annotations
 
@@ -94,9 +100,9 @@ def check_tokenizer() -> bool:
     return ok
 
 
-def check_euler() -> bool:
+def check_samplers() -> bool:
     """A fake network with memory, so any reordering or reuse of x shows up."""
-    print("  3. Euler loop")
+    print("  3. sampler loops")
     rs = np.random.RandomState(3)
     A = rs.randn(1, 3, 8, 8).astype(np.float32) * 0.3
     B = rs.randn(1, 3, 8, 8).astype(np.float32) * 0.1
@@ -124,13 +130,22 @@ def check_euler() -> bool:
             return ms_ref.calculate_denoised(torch.tensor(sigma),
                                              torch.from_numpy(v), x)
 
-    ref = KS.sample_euler(Wrapped(), torch.from_numpy(x0_ref), sigmas_t,
-                          disable=True).numpy()
-    mine = S.sample_euler(lambda x, sigma, i: velocity(x, sigma), x0, sigmas)
-    err = float(np.abs(ref - mine).max())
-    loop_ok = err == 0.0
-    print(f"     12-step trajectory     {'exact' if loop_ok else 'diff %.3e' % err}"
-          f"   |x|max {np.abs(mine).max():.4f}")
+    loop_ok = True
+    for name, ref_fn, mine_fn, tol in (
+        ("euler", KS.sample_euler, S.sample_euler, 0.0),
+        # dpmpp_2m goes through math.log where ComfyUI goes through torch.log,
+        # so it is float32-close rather than bit-identical.
+        ("dpmpp_2m", KS.sample_dpmpp_2m, S.sample_dpmpp_2m, 1e-6),
+    ):
+        ref = ref_fn(Wrapped(), torch.from_numpy(x0_ref), sigmas_t,
+                     disable=True).numpy()
+        mine = mine_fn(lambda x, sigma, i: velocity(x, sigma), x0, sigmas)
+        err = float(np.abs(ref - mine).max())
+        good = err <= tol
+        loop_ok &= good
+        print(f"     {name:<10} 12 steps   "
+              f"{'exact' if err == 0 else '%.3e' % err}"
+              f"{'' if good else '   TOO FAR'}   |x|max {np.abs(mine).max():.4f}")
     return scale_ok and loop_ok
 
 
@@ -138,8 +153,8 @@ def main() -> int:
     print("milestone 7a - sampler bookkeeping vs ComfyUI\n")
     ok = check_schedule()
     ok &= check_tokenizer()
-    ok &= check_euler()
-    print("\n  " + ("PASS - tokenizer and Euler loop exact, schedule within 2 ULP"
+    ok &= check_samplers()
+    print("\n  " + ("PASS - tokenizer and both samplers match, schedule within 2 ULP"
                     if ok else "FAIL"))
     return 0 if ok else 1
 
