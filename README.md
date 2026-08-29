@@ -125,7 +125,7 @@ numerically against ComfyUI on the same machine, same weights, same inputs,
 before the next stage is written.
 
 1. weight audit — every one of the 758 tensors assigned to a module (**done**)
-2. patch embed + final layer — exact match on random input
+2. patch embed + final layer — match on random input (**done**, see below)
 3. one decoder layer — match hidden states
 4. full decoder, no vision — match hidden states at every layer
 5. vision tower — match image embeds
@@ -133,12 +133,36 @@ before the next stage is written.
 7. sampler — match the image bit-for-bit at cfg 1.0, fixed seed
 8. only then: quantise, and re-measure against the 40.1 s baseline
 
+## Precision: what "matches" means
+
+Measured before any tolerance was written (`notes/precision.md`): the bf16
+round-trip floor on this machine is **2.0e-3**, and in bf16 MLX and torch matmul
+are *identical* (both 3.968e-3 vs float64). MLX's fp32 matmul is 8.0e-4 — 300x
+looser than torch's 2.4e-6, but still 4x tighter than the bf16 floor the real
+weights carry.
+
+So the bar is: **the port must differ from the reference by less than the
+precision the model actually runs at.** Milestone 2 lands at 3–46% of that floor:
+
+```
+BottleneckPatchEmbed   9.162e-04   45.81% of the bf16 floor
+FinalLayer             3.670e-04   18.35%
+TimestepEmbedder       7.768e-04   38.84%
+timestep_embedding     6.056e-05    3.03%
+patchify / unpatchify  0.000e+00    exact, checked against einops
+```
+
+The patch ordering is the one that had to be exact rather than close, since a
+wrong ordering corrupts everything downstream while looking like a model bug.
+
 ## Layout
 
 ```
-mdream/weights.py    checkpoint inspection and key -> module mapping
-notes/reference.md   where the PyTorch reference lives, and what to read
-tests/              numeric parity checks against ComfyUI
+mdream/weights.py     checkpoint inspection and key -> module mapping
+mdream/layers.py      pixel shims: patch embed, final layer, timestep embed
+notes/reference.md    where the PyTorch reference lives, and what to read
+notes/precision.md    measured precision floors; where tolerances come from
+tests/test_shims.py   milestone 2 parity check
 ```
 
 ## Reference
