@@ -16,7 +16,7 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-DEFAULT_CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+from .paths import DEFAULT_CKPT  # noqa: F401  (re-exported)
 
 # What the ComfyUI implementation says must be there.
 EXPECT = {

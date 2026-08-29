@@ -19,6 +19,7 @@ Three checks:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -26,7 +27,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream import sampling as S             # noqa: E402
 from mdream.tokenizer import PromptTokenizer  # noqa: E402

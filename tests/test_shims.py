@@ -13,6 +13,7 @@ number creeping upward is visible rather than hidden behind a threshold.
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -23,7 +24,9 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from mdream import layers as L  # noqa: E402
 
-CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+CKPT = Path(os.environ.get(
+    "MDREAM_CKPT",
+    Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors")).expanduser()
 WANT = list(L.SHIM_KEYS)
 
 

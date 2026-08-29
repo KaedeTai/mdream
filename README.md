@@ -35,6 +35,49 @@ $ python -m mdream.weights
 PASS - every tensor is accounted for
 ```
 
+## Getting it running
+
+Apple Silicon only — this is an MLX implementation.
+
+```bash
+pip install mlx numpy pillow
+# torch is optional: needed to run the tests (they compare against ComfyUI's
+# own code) and for --match-comfy, which reproduces ComfyUI's preprocessing
+# bit-for-bit. Generating images does not need it.
+```
+
+Weights are the ComfyUI single-file repack, not the HF multi-folder layout:
+[Comfy-Org/HiDream-O1-Image](https://huggingface.co/Comfy-Org/HiDream-O1-Image/tree/main/checkpoints)
+— `hidream_o1_image_dev_bf16.safetensors` (distilled, 16.4 GB) is the one used
+throughout; the `base` variant beside it needs cfg 5.0 even for text-to-image.
+
+Paths come from the environment, with macOS-ish defaults:
+
+```
+MDREAM_CKPT        the checkpoint            default ~/models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors
+MDREAM_COMFYUI     a ComfyUI checkout        default ~/ComfyUI
+MDREAM_TOKENIZER   vocab.json + merges.txt   default <ComfyUI>/comfy/text_encoders/qwen25_tokenizer
+```
+
+ComfyUI is needed for two things and neither is generation: the Qwen2 tokenizer
+files it ships, and running the tests, all of which import ComfyUI's modules
+and compare against them directly rather than reimplementing the reference.
+
+```bash
+python3 scripts/generate.py "a red fox in fresh snow, golden hour" -o fox.png \
+    --width 768 --height 1024 --steps 28 --seed 42
+
+python3 scripts/generate.py x --bits 6 --save-quantized q6.safetensors
+python3 scripts/generate.py "..." --ckpt q6.safetensors -o out.png
+
+python3 scripts/edit.py "change the sweater to dark green" -i photo.png \
+    -o out.png --width 1152 --height 1536 --cfg 5.0
+```
+
+Editing has two hard requirements, both of them the model's and not this
+port's: **cfg must be above 1**, and the canvas must be **at least ~1.7 MP**.
+Below either, the output is noise — see milestone 8 below.
+
 ## Why this exists
 
 HiDream-O1 runs on this machine today through ComfyUI on torch/MPS. That path

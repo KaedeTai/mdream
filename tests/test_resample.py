@@ -14,6 +14,7 @@ so the size of that rounding stays visible.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -62,7 +63,8 @@ def main() -> int:
               f"   (torch f32 is {float(np.abs(b32 - b64).max()):.3e} from f64)")
 
     print("  lanczos (ComfyUI's uint8 PIL round trip)")
-    sys.path.insert(0, str(Path.home() / "ComfyUI"))
+    sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
     import comfy.utils
     for shape, oh, ow in CASES:
         x = rs.rand(*shape).astype(np.float32)

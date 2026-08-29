@@ -26,7 +26,7 @@ from .model import HiDreamO1, load_model
 from .vision import VisionTower, load_vision
 from .tokenizer import PromptTokenizer
 
-DEFAULT_CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+from .paths import DEFAULT_CKPT  # noqa: F401  (re-exported)
 
 
 def torch_style_noise(shape, seed: int) -> np.ndarray:

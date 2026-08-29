@@ -15,14 +15,17 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream import conditioning as C, decoder as D  # noqa: E402
 from mdream.model import HiDreamO1, load_model  # noqa: E402
 import comfy.ops  # noqa: E402
 from comfy.ldm.hidream_o1.model import HiDreamO1Transformer  # noqa: E402
 
-CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+CKPT = Path(os.environ.get(
+    "MDREAM_CKPT",
+    Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors")).expanduser()
 
 
 def to_np(a):

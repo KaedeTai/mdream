@@ -11,6 +11,7 @@ Checked in order of how easy each is to get wrong:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,7 +20,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream import decoder as D  # noqa: E402
 import comfy.ops  # noqa: E402
@@ -28,7 +30,9 @@ from comfy.text_encoders.llama import (  # noqa: E402
     apply_rope as ref_apply_rope,
 )
 
-CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+CKPT = Path(os.environ.get(
+    "MDREAM_CKPT",
+    Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors")).expanduser()
 PREFIX = "model.language_model.layers.0."
 BF16_FLOOR = 2.0e-3
 

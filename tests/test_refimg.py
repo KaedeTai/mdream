@@ -12,6 +12,7 @@ tests/test_resample.py already measured at ~3e-5.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,14 +21,19 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream.refimg import build_edit_conds  # noqa: E402
 from mdream.tokenizer import PromptTokenizer  # noqa: E402
 
 from comfy.ldm.hidream_o1.conditioning import build_extra_conds  # noqa: E402
 
-IMG = Path.home() / "ComfyUI/input/bodymorph_src.png"
+# Any photograph works; point MDREAM_REF_IMAGE at one. The chain being
+# tested is a sequence of roundings that depends on the image's dimensions,
+# not its content, so use something that is not square and not tiny.
+IMG = Path(os.environ["MDREAM_REF_IMAGE"]).expanduser() \
+    if "MDREAM_REF_IMAGE" in os.environ else None
 PROMPT = "make the sweater dark green and keep everything else identical"
 H, W = 1024, 768
 
@@ -38,6 +44,9 @@ def load(path) -> np.ndarray:
 
 def main() -> int:
     print("milestone 8c - ref-image preprocessing vs ComfyUI\n")
+    if IMG is None or not IMG.exists():
+        print("  set MDREAM_REF_IMAGE to a photograph to run this test")
+        return 0
     img = load(IMG)
     ids = PromptTokenizer().encode(PROMPT)
     print(f"  reference image {img.shape[1]}x{img.shape[0]}, target {W}x{H}, "

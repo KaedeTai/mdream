@@ -10,6 +10,7 @@ interpolation still produces plausible-looking numbers at the output.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +19,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream.vision import VisionConfig, VisionTower, load_vision, rope_tables  # noqa: E402
 
@@ -26,7 +28,9 @@ import comfy.ops  # noqa: E402
 from comfy.ldm.hidream_o1.model import QWEN3VL_VISION_DEFAULTS  # noqa: E402
 from comfy.text_encoders.qwen35 import Qwen35VisionModel  # noqa: E402
 
-CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
+CKPT = Path(os.environ.get(
+    "MDREAM_CKPT",
+    Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors")).expanduser()
 GRID = np.array([[1, 32, 44]], dtype=np.int64)          # 1408 patches -> 352 tokens
 
 

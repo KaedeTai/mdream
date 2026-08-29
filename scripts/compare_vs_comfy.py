@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -33,7 +34,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 PROMPT = ("a photograph of a red fox sitting in fresh snow at the edge of a "
           "birch forest, golden hour light, shallow depth of field")
@@ -86,7 +88,8 @@ def comfy_run(url: str, prefix: str, prompt: str, w: int, h: int, steps: int,
     elapsed = time.time() - t0
     name = hist[pid]["outputs"]["10"]["latents"][0]["filename"]
     import safetensors.torch as st
-    path = Path.home() / "ComfyUI/output/latents" / name
+    path = Path(os.environ.get("MDREAM_COMFYUI",
+                               Path.home() / "ComfyUI")).expanduser() / "output/latents" / name
     return elapsed, st.load_file(str(path))["latent_tensor"].float().numpy()
 
 

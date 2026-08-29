@@ -34,18 +34,15 @@ PREFIX = [IM_START_ID, USER_ID, NEWLINE_ID]
 SUFFIX = [IM_END_ID, NEWLINE_ID, IM_START_ID, ASSISTANT_ID, NEWLINE_ID,
           BOI_TOKEN_ID, TMS_TOKEN_ID]
 
-_SEARCH = [
-    Path.home() / "ComfyUI/comfy/text_encoders/qwen25_tokenizer",
-    Path(__file__).resolve().parent / "qwen25_tokenizer",
-]
-
-
 def default_tokenizer_path() -> Path:
-    for p in _SEARCH:
+    from .paths import TOKENIZER_DIRS
+    for p in TOKENIZER_DIRS:
         if (p / "vocab.json").exists():
             return p
     raise FileNotFoundError(
-        "no Qwen2 tokenizer found; looked in " + ", ".join(str(p) for p in _SEARCH)
+        "no Qwen2 tokenizer found; looked in "
+        + ", ".join(str(p) for p in TOKENIZER_DIRS)
+        + ". Set MDREAM_TOKENIZER to a directory with vocab.json and merges.txt."
     )
 
 

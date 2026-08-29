@@ -11,6 +11,7 @@ The real weights are exercised separately by the milestones that loaded them.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,7 +20,8 @@ import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path.home() / "ComfyUI"))
+sys.path.insert(0, str(Path(os.environ.get("MDREAM_COMFYUI",
+                                            Path.home() / "ComfyUI")).expanduser()))
 
 from mdream import conditioning as C, decoder as D  # noqa: E402
 from mdream.model import HiDreamO1  # noqa: E402
