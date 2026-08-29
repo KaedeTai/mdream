@@ -2,7 +2,18 @@
 
 MLX implementation of **HiDream-O1-Image** for Apple Silicon.
 
-Status: **day 1 — architecture mapped, weight audit passing, nothing generates yet.**
+Status: **text-to-image works and matches ComfyUI.** 768x1024, 28 steps, euler,
+cfg 1.0 — `mdream fp32` vs `ComfyUI fp32` is 46.3 dB PSNR on the final latent,
+16.2 dB tighter than the reference's own bf16-vs-fp32 envelope. The vision
+tower (reference-image editing) and quantisation are not done yet.
+
+```
+$ python3 scripts/generate.py "a red fox in fresh snow, golden hour" \
+      -o fox.png --width 768 --height 1024 --steps 28 --seed 42
+  loaded hidream_o1_image_dev_bf16.safetensors in 1.7s
+  768x1024  768 image tokens + 24 text = 792 sequence   28 steps  seed 42
+  8.0s total, 0.29s/step
+```
 
 ```
 $ python -m mdream.weights
@@ -26,9 +37,17 @@ works but leaves two things on the table:
    On a unified-memory machine the binding constraint is usually memory
    bandwidth, so being unable to shrink 16 GB of bf16 weights is the single
    biggest lost opportunity. MLX quantises to 4/8-bit natively.
-2. **MPS overhead.** Measured baseline to beat, warm, 768x1024, one edit:
-   **40.1 s** (dev bf16, 28 steps, cfg 1.0) and **75.1 s** (dev bf16, 28 steps,
-   cfg 5.0). Anything slower than that is not worth shipping.
+2. ~~**MPS overhead.**~~ This was the second reason and it turned out to be
+   mostly wrong, so it is left here rather than quietly deleted. The number it
+   was based on — 40.1 s, warm, 768x1024, dev bf16, 28 steps, cfg 1.0 — is the
+   **image-edit** path, which carries a reference image through the ViT and
+   roughly doubles the sequence. The comparable text-to-image number is 8.4 s,
+   and mdream does the identical job in 8.0 s. **In bf16 MLX buys about 5%.**
+
+   The gap only opens in fp32 — ComfyUI 39.9 s, mdream 14.2 s, **2.8x** — which
+   is real but not what anyone ships. So reason 1 is the whole case: the reason
+   to have an MLX implementation is that it can be quantised on this machine
+   and the torch/MPS one cannot.
 
 mflux was the obvious host and it is the wrong one: mflux is built around FLUX
 (DiT + T5/CLIP text encoders + VAE) and HiDream-O1 has none of that shape.
@@ -131,9 +150,9 @@ before the next stage is written.
 4. full decoder, no vision — match hidden states at every layer (**done**, worst layer 2.8e-6)
 5. T2I conditioning — position ids, masks, ar_len (**done**, exact)
 6. full forward at one timestep, text only — match the velocity prediction (**done**, 8.9e-8)
-7. sampler — match the image at cfg 1.0, fixed seed
+7. sampler — match the image at cfg 1.0, fixed seed (**done**, 46.3 dB fp32)
 8. vision tower — match image embeds (needed for the edit path, not for T2I)
-9. only then: quantise, and re-measure against the 40.1 s baseline
+9. only then: quantise, and re-measure against the 8.4 s T2I baseline
 
 Order changed at milestone 5: the vision tower is only needed for reference-image
 editing, and everything else — conditioning, forward, sampler — can be finished
@@ -190,6 +209,51 @@ images — but it means **hidden-state parity is only meaningful against fp32**.
 Later milestones, and especially quantisation, have to be judged on the output
 image, not on matching activations.
 
+## Milestone 7: the sampler, and what "matches" means for an image
+
+The sampler itself is bookkeeping, so it is checked exactly
+(`tests/test_sampling.py`): tokenisation is byte-identical to ComfyUI's
+`HiDreamO1Tokenizer` on four prompts including Chinese, the 8x initial noise
+scaling is identical, and a 12-step Euler trajectory driven by a fake network
+is bit-identical to `comfy.k_diffusion.sampling.sample_euler`. Only the sigma
+schedule is not exact, by 2 float32 ULPs, because torch's `linspace` uses a
+vectorised path no scalar numpy formula reproduces. The end-to-end test removes
+even that by importing ComfyUI's sigmas.
+
+The image is the hard part. A 28-step trajectory in bf16 is chaotic enough that
+the reference does not agree with *itself* across precisions, so a single
+mdream-vs-ComfyUI number would be unreadable. Measuring the envelope first
+makes it readable:
+
+```
+768x1024, 28 steps euler, cfg 1.0, seed 42, ComfyUI's sigmas, same noise
+
+  the envelope (how far the reference moves from itself)
+    comfy bf16  vs comfy fp32     mean|d| 2.361e-02   PSNR 30.10 dB
+    mdream bf16 vs mdream fp32    mean|d| 2.351e-02   PSNR 29.13 dB
+
+  mdream against the reference
+    mdream fp32 vs comfy fp32     mean|d| 2.551e-03   PSNR 46.34 dB
+    mdream bf16 vs comfy bf16     mean|d| 3.169e-02   PSNR 26.50 dB
+```
+
+Three things fall out of that table:
+
+- **The fp32 row is the proof.** 2.55e-3 is 9.3x tighter than the envelope the
+  model actually runs in. The arithmetic is right.
+- **mdream's bf16 sensitivity equals the reference's** (2.351e-2 vs 2.361e-2).
+  A port that had, say, an fp32 accumulation the reference does not have would
+  show up here as a *smaller* number, which would look like a win and be a
+  divergence.
+- **The bf16-vs-bf16 row is not a failure.** Two independent bf16 trajectories
+  should diverge by roughly the quadrature sum of their own bf16 errors:
+  sqrt(2.361^2 + 2.351^2) = 3.33e-2 predicted, 3.17e-2 measured. It lands where
+  the other two rows say it must.
+
+The images are visually indistinguishable — same composition, same pose, same
+light; the difference is in fur and twig texture, which is where a chaotic
+trajectory puts it.
+
 ## Layout
 
 ```
@@ -198,6 +262,11 @@ mdream/layers.py      pixel shims: patch embed, final layer, timestep embed
 mdream/decoder.py     Qwen3-VL decoder: MRoPE, GQA attention, SwiGLU, two-pass mask
 mdream/conditioning.py  T2I sequence assembly and MRoPE position ids
 mdream/model.py       the assembled forward pass
+mdream/tokenizer.py   prompt -> input_ids, HiDream-O1's chat template
+mdream/sampling.py    flow schedule, 8x noise scaling, Euler
+mdream/generate.py    the three tied together
+scripts/generate.py         CLI
+scripts/compare_vs_comfy.py milestone 7 harness (drives a running ComfyUI)
 notes/reference.md    where the PyTorch reference lives, and what to read
 notes/precision.md    measured precision floors; where tolerances come from
 tests/test_shims.py          milestone 2 parity check
@@ -207,6 +276,7 @@ tests/test_decoder_full.py   milestone 4b, all 36 layers streamed one at a time
 tests/test_conditioning.py   milestone 5, exact match on sequence assembly
 tests/test_forward.py        milestone 6, whole forward on a small synthetic model
 tests/test_forward_real.py   milestone 6b, real 8B weights load where they belong
+tests/test_sampling.py       milestone 7a, schedule/tokenizer/Euler vs ComfyUI
 ```
 
 ## Reference

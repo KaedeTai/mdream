@@ -48,9 +48,26 @@ class HiDreamO1(nn.Module):
                                                cfg.hidden_size // 4, cfg.hidden_size)
         self.final_layer = FinalLayer(cfg.hidden_size, patch_size, in_channels)
 
+    def prepare(self, position_ids: mx.array, vinput_mask: mx.array, ar_len: int,
+                tgt_len: int, seq_len: int, compute_dtype=mx.bfloat16) -> dict:
+        """Everything that depends only on the geometry, not on x or sigma.
+
+        The rope frequencies, the two-pass mask and the target indices are the
+        same at every sampling step; recomputing them per step costs a Python
+        loop over the whole sequence and a mask build, which is pure waste over
+        28 steps. The sampler builds this once.
+        """
+        freqs = precompute_freqs_cis(self.cfg.head_dim, position_ids, self.cfg.rope_theta,
+                                     self.cfg.rope_dims, self.cfg.interleaved_mrope)
+        return {
+            "freqs": tuple(t.astype(compute_dtype) for t in freqs),
+            "mask": two_pass_mask(ar_len, seq_len, compute_dtype),
+            "idx": mx.array([i for i, v in enumerate(vinput_mask.tolist()[0]) if v][:tgt_len]),
+        }
+
     def __call__(self, x: mx.array, timesteps: mx.array, input_ids: mx.array,
                  position_ids: mx.array, vinput_mask: mx.array, ar_len: int,
-                 compute_dtype=mx.bfloat16) -> mx.array:
+                 compute_dtype=mx.bfloat16, cache: Optional[dict] = None) -> mx.array:
         B, _, H, W = x.shape
         h_p, w_p = H // self.patch_size, W // self.patch_size
         tgt_len = h_p * w_p
@@ -66,14 +83,13 @@ class HiDreamO1(nn.Module):
         h = mx.concatenate([emb, self.x_embedder(z)], axis=1)
         T = h.shape[1]
 
-        freqs = precompute_freqs_cis(self.cfg.head_dim, position_ids, self.cfg.rope_theta,
-                                     self.cfg.rope_dims, self.cfg.interleaved_mrope)
-        freqs = tuple(t.astype(compute_dtype) for t in freqs)
-        h = self.decoder(h, freqs, two_pass_mask(ar_len, T, compute_dtype))
+        if cache is None:
+            cache = self.prepare(position_ids, vinput_mask, ar_len, tgt_len, T,
+                                 compute_dtype)
+        h = self.decoder(h, cache["freqs"], cache["mask"])
 
         # target positions are the pixel half; take the first tgt_len of them
-        idx = mx.array([i for i, v in enumerate(vinput_mask.tolist()[0]) if v][:tgt_len])
-        target = mx.take(h, idx, axis=1)
+        target = mx.take(h, cache["idx"], axis=1)
 
         x_pred = unpatchify(self.final_layer(target).astype(mx.float32),
                             h_p, w_p, self.patch_size, self.in_channels)
