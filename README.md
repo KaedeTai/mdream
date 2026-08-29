@@ -9,8 +9,10 @@ Text-to-image: `mdream fp32` vs `ComfyUI fp32` is 46.3 dB PSNR on the final
 latent, 16.2 dB tighter than the reference's own bf16-vs-fp32 envelope.
 Editing: matches ComfyUI at 1152x1536, and reproduces its failure at 768x1024,
 which turns out to be the model rather than either implementation.
-Quantisation: 6-bit is visually indistinguishable at 6.49 GiB against 14.17,
-and is the thing ComfyUI on MPS cannot do at all.
+Quantisation: works (6-bit is visually indistinguishable at 6.49 GiB against
+14.17) but is **not recommended** — it is slower than bf16 at every resolution
+and the memory it saves is only worth having on a machine that cannot hold
+bf16. See milestone 9.
 
 Not done: the SDE samplers, the patch-seam smoothing ComfyUI offers, and the
 prefix KV cache the reference keeps across sampling steps.
@@ -67,12 +69,12 @@ and compare against them directly rather than reimplementing the reference.
 python3 scripts/generate.py "a red fox in fresh snow, golden hour" -o fox.png \
     --width 768 --height 1024 --steps 28 --seed 42
 
-python3 scripts/generate.py x --bits 6 --save-quantized q6.safetensors
-python3 scripts/generate.py "..." --ckpt q6.safetensors -o out.png
-
 python3 scripts/edit.py "change the sweater to dark green" -i photo.png \
     -o out.png --width 1152 --height 1536 --cfg 5.0
 ```
+
+Quantisation exists (`--bits 6 --save-quantized q6.safetensors`) but bf16 is
+the better default on any machine that fits it — see milestone 9.
 
 Editing has three hard requirements, all of them the model's and not this
 port's: **cfg must be above 1**, the canvas must be **at least ~1.7 MP**, and
@@ -97,9 +99,16 @@ works but leaves two things on the table:
    and mdream does the identical job in 8.0 s. **In bf16 MLX buys about 5%.**
 
    The gap only opens in fp32 — ComfyUI 39.9 s, mdream 14.2 s, **2.8x** — which
-   is real but not what anyone ships. So reason 1 is the whole case: the reason
-   to have an MLX implementation is that it can be quantised on this machine
-   and the torch/MPS one cannot.
+   is real but not what anyone ships.
+
+   And reason 1 turned out weaker than it looked too, once quantisation was
+   measured rather than assumed: 6-bit is *slower* than bf16 here, and the
+   memory it saves only matters on a machine that cannot hold bf16 at all.
+
+   So the honest case for this implementation is narrower than the one it was
+   started on: it is a dependency-free MLX path that matches ComfyUI, it wins
+   in fp32, and it makes quantisation *possible* for the machines that need it
+   — not a speed-up for machines that do not.
 
 mflux was the obvious host and it is the wrong one: mflux is built around FLUX
 (DiT + T5/CLIP text encoders + VAE) and HiDream-O1 has none of that shape.
@@ -347,7 +356,8 @@ residual stream is projected straight to pixels, so it shows up as gain.
 So the honest recommendation is not 4-bit:
 
 - **6-bit g64, 6.49 GiB** — visually identical to bf16 across all three test
-  prompts. This is the one to use.
+  prompts, and the best of the quantised options. Use it only if bf16 does not
+  fit; it is slower.
 - **8-bit g64, 8.10 GiB** — identical, if you want no argument at all.
 - **4-bit + `down_proj` at 8-bit, 5.71 GiB** — correct exposure, but a
   different and consistently *simpler* sample: fewer objects, less background
