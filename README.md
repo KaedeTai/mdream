@@ -74,7 +74,9 @@ python3 scripts/edit.py "change the sweater to dark green" -i photo.png \
 ```
 
 Quantisation exists (`--bits 6 --save-quantized q6.safetensors`) but bf16 is
-the better default on any machine that fits it — see milestone 9.
+the better default on any machine that fits it — see milestone 9. A ready-made
+6-bit **base** checkpoint, for machines that cannot hold bf16, is at
+[KaedeTai/HiDream-O1-Image-mlx-6bit-mdream](https://huggingface.co/KaedeTai/HiDream-O1-Image-mlx-6bit-mdream).
 
 Editing has three hard requirements, all of them the model's and not this
 port's: **cfg must be above 1**, the canvas must be **at least ~1.7 MP**, and
