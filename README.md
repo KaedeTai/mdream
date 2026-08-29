@@ -151,7 +151,7 @@ before the next stage is written.
 5. T2I conditioning — position ids, masks, ar_len (**done**, exact)
 6. full forward at one timestep, text only — match the velocity prediction (**done**, 8.9e-8)
 7. sampler — match the image at cfg 1.0, fixed seed (**done**, 46.3 dB fp32)
-8. vision tower — match image embeds (needed for the edit path, not for T2I)
+8. vision tower — match image embeds (**done**, exact stage by stage on CPU)
 
 Steps 8 and 9 swapped order: quantisation is the whole reason this port exists
 and it only needs the text-to-image path, so it went first.
@@ -334,6 +334,7 @@ mdream/tokenizer.py   prompt -> input_ids, HiDream-O1's chat template
 mdream/sampling.py    flow schedule, 8x noise scaling, Euler
 mdream/generate.py    the three tied together
 mdream/quantize.py    4/6/8-bit, mixed precision, quantised checkpoints
+mdream/vision.py      Qwen3-VL vision tower, for the reference-image path
 scripts/generate.py         CLI
 scripts/compare_vs_comfy.py milestone 7 harness (drives a running ComfyUI)
 notes/reference.md    where the PyTorch reference lives, and what to read
@@ -346,6 +347,7 @@ tests/test_conditioning.py   milestone 5, exact match on sequence assembly
 tests/test_forward.py        milestone 6, whole forward on a small synthetic model
 tests/test_forward_real.py   milestone 6b, real 8B weights load where they belong
 tests/test_sampling.py       milestone 7a, schedule/tokenizer/Euler vs ComfyUI
+tests/test_vision.py         milestone 8, the vision tower, stage by stage
 ```
 
 ## Reference
