@@ -83,7 +83,8 @@ vision tower and no MRoPE**. So the reusable part is smaller than it looks:
 | Qwen3-VL vision tower (27 blocks) | **write** |
 | two-pass attention (causal prefix + full gen) | **done** — 1.2e-7, prefix isolation exact |
 | patch embed / final layer / timestep embed | **write** (trivial) |
-| flow sampler, sigma schedule, conditioning | **write** |
+| conditioning: input_ids, MRoPE position ids, ar_len | **done** — exact |
+| flow sampler, sigma schedule | **write** |
 | tokenizer / processor | reuse HF |
 
 Parameter inventory recovered by the audit, which is what the port implements against:
@@ -128,10 +129,16 @@ before the next stage is written.
 2. patch embed + final layer — match on random input (**done**)
 3. one decoder layer — match hidden states (**done**, 1.09e-6 on CPU)
 4. full decoder, no vision — match hidden states at every layer (**done**, worst layer 2.8e-6)
-5. vision tower — match image embeds
-6. full forward at one timestep — match the velocity prediction
-7. sampler — match the image bit-for-bit at cfg 1.0, fixed seed
-8. only then: quantise, and re-measure against the 40.1 s baseline
+5. T2I conditioning — position ids, masks, ar_len (**done**, exact)
+6. full forward at one timestep, text only — match the velocity prediction
+7. sampler — match the image at cfg 1.0, fixed seed
+8. vision tower — match image embeds (needed for the edit path, not for T2I)
+9. only then: quantise, and re-measure against the 40.1 s baseline
+
+Order changed at milestone 5: the vision tower is only needed for reference-image
+editing, and everything else — conditioning, forward, sampler — can be finished
+and verified on the text-only path first. That gets a running generator sooner
+and leaves the tower as one self-contained piece rather than a blocker.
 
 ## Precision: what "matches" means
 
@@ -188,11 +195,15 @@ image, not on matching activations.
 ```
 mdream/weights.py     checkpoint inspection and key -> module mapping
 mdream/layers.py      pixel shims: patch embed, final layer, timestep embed
-mdream/decoder.py     Qwen3-VL decoder: MRoPE, GQA attention, SwiGLU block
+mdream/decoder.py     Qwen3-VL decoder: MRoPE, GQA attention, SwiGLU, two-pass mask
+mdream/conditioning.py  T2I sequence assembly and MRoPE position ids
 notes/reference.md    where the PyTorch reference lives, and what to read
 notes/precision.md    measured precision floors; where tolerances come from
 tests/test_shims.py          milestone 2 parity check
 tests/test_decoder_layer.py  milestone 3, against ComfyUI's own TransformerBlock
+tests/test_two_pass.py       milestone 4a, attention boundary and prefix isolation
+tests/test_decoder_full.py   milestone 4b, all 36 layers streamed one at a time
+tests/test_conditioning.py   milestone 5, exact match on sequence assembly
 ```
 
 ## Reference
