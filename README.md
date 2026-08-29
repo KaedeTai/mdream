@@ -492,3 +492,10 @@ layout and a CUDA GPU):
 
 Weights: `~/models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors`
 (dev/distilled, 16.4 GB — the base variant is beside it and needs cfg 5.0).
+
+## License
+
+MIT — see `LICENSE`. This covers the code in this repository only. The
+HiDream-O1-Image weights are licensed separately by HiDream-ai, and the
+reference implementation this was checked against is ComfyUI's, under its own
+license.
