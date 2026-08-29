@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mdream reference-image editing.
 
-    python3 scripts/edit.py photo.png "change the sweater to dark green" \
+    python3 scripts/edit.py "change the sweater to dark green" -i photo.png \
         -o out.png --width 1152 --height 1536 --cfg 5.0
 
 Two settings are not really optional:
@@ -30,8 +30,11 @@ from mdream.generate import DEFAULT_CKPT, Generator  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("image", nargs="+", help="reference image(s)")
+    # prompt first, then -i for each reference image: a greedy nargs="+" for
+    # the images would swallow the prompt.
     ap.add_argument("prompt")
+    ap.add_argument("-i", "--image", action="append", required=True,
+                    help="reference image (repeat for more than one)")
     ap.add_argument("-o", "--out", default="edit.png")
     ap.add_argument("--width", type=int, default=1152)
     ap.add_argument("--height", type=int, default=1536)
