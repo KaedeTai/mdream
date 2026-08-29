@@ -12,6 +12,10 @@ Two settings are not really optional:
   the canvas must be >= ~1.7 MP. HiDream-O1 was trained at ~4 MP and the edit
   path does not merely degrade below that, it collapses. 768x1024 is noise;
   1152x1536 is clean.
+
+  use the BASE checkpoint for anything with skin in it. The distilled `dev`
+  variant returns faces covered in dark speckles with a crazed texture. This
+  script defaults to base for that reason.
 """
 from __future__ import annotations
 
@@ -25,7 +29,8 @@ import mlx.core as mx  # noqa: E402
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from mdream.generate import DEFAULT_CKPT, Generator  # noqa: E402
+from mdream.generate import Generator  # noqa: E402
+from mdream.paths import DEFAULT_EDIT_CKPT  # noqa: E402
 
 
 def main() -> int:
@@ -43,7 +48,9 @@ def main() -> int:
     ap.add_argument("--cfg", type=float, default=5.0)
     ap.add_argument("--negative", default="")
     ap.add_argument("--sampler", default="dpmpp_2m", choices=["dpmpp_2m", "euler"])
-    ap.add_argument("--ckpt", default=str(DEFAULT_CKPT))
+    ap.add_argument("--ckpt", default=str(DEFAULT_EDIT_CKPT),
+                    help="defaults to the BASE checkpoint: the distilled dev one "
+                         "wrecks skin (see README)")
     ap.add_argument("--match-comfy", action="store_true",
                     help="route the preprocessing resizes through torch, "
                          "bit-identical to ComfyUI")

@@ -74,9 +74,10 @@ python3 scripts/edit.py "change the sweater to dark green" -i photo.png \
     -o out.png --width 1152 --height 1536 --cfg 5.0
 ```
 
-Editing has two hard requirements, both of them the model's and not this
-port's: **cfg must be above 1**, and the canvas must be **at least ~1.7 MP**.
-Below either, the output is noise — see milestone 8 below.
+Editing has three hard requirements, all of them the model's and not this
+port's: **cfg must be above 1**, the canvas must be **at least ~1.7 MP**, and
+anything involving **skin needs the `base` checkpoint, not `dev`**. `scripts/edit.py`
+defaults to base for that reason. See milestone 8 below.
 
 ## Why this exists
 
@@ -396,6 +397,34 @@ path's 4158 tokens", from a 113.6 s 6-bit run against a 160.3 s bf16 run. Those
 two were forty minutes apart with different things on the machine. Interleaved,
 the ordering reverses. The lesson is the one this repo keeps relearning: two
 numbers measured at different times are not a comparison.
+
+### `dev` cannot edit skin
+
+The distilled `dev` checkpoint returns portraits covered in dark speckles with
+a crazed, reptilian skin texture, and frequently paints a before/after diptych
+instead of one image. One variable changed at a time, everything else identical
+(1152×1536, dpmpp_2m, 28 steps, cfg 5.0, seed 7):
+
+```
+  dev                      speckled, crazed skin, diptych
+  dev + seam smoothing     identical failure
+  dev at 1728x2304 (4 MP)  identical failure
+  dev at cfg 3.0           identical failure
+  dev in bf16 and in 6-bit identical failure
+  base                     clean, natural, single portrait
+```
+
+ComfyUI reproduces the `dev` failure exactly, so it is upstream, not this port
+— the third time in this project that running the control first was worth more
+than reading the code. Nothing rescues `dev`: not resolution, not cfg, not the
+seam-smoothing node written for patch artefacts.
+
+Skin is the only high-frequency region in a portrait — hair, clothing and
+background come out fine either way — which is why the damage lands precisely
+on the face. Distillation evidently costs the top of the frequency range, and
+a pixel-space model has nowhere to hide it.
+
+`dev` remains the default for text-to-image, where it is fine and cheaper.
 
 ## Layout
 

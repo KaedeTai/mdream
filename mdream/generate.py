@@ -210,6 +210,11 @@ class Generator:
         cost of an edit.
         """
         assert width % 32 == 0 and height % 32 == 0, "patch size is 32"
+        if "dev" in Path(self.ckpt).name and self.verbose:
+            print("  WARNING: this is the dev (distilled) checkpoint. On anything "
+                  "involving skin it returns speckled, crazed faces -- and often a "
+                  "before/after diptych. Use the base checkpoint for portraits; "
+                  "dev is fine for clothing, background and objects.")
         if width * height < 1_700_000 and self.verbose:
             print(f"  WARNING: {width}x{height} is {width * height / 1e6:.2f} MP. "
                   "The edit path collapses to noise below ~1.7 MP -- ComfyUI does "

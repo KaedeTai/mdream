@@ -22,10 +22,13 @@ def _env(name: str, default: Path) -> Path:
 
 
 COMFYUI = _env("MDREAM_COMFYUI", Path.home() / "ComfyUI")
-DEFAULT_CKPT = _env(
-    "MDREAM_CKPT",
-    Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors",
-)
+_CKPT_DIR = Path.home() / "models/HiDream-O1-Image/checkpoints"
+DEFAULT_CKPT = _env("MDREAM_CKPT", _CKPT_DIR / "hidream_o1_image_dev_bf16.safetensors")
+# Editing anything with skin in it needs the base checkpoint: the distilled
+# `dev` variant returns faces covered in speckles with a crazed texture. See
+# the README. `dev` stays the text-to-image default because it is fine there
+# and half the steps.
+DEFAULT_EDIT_CKPT = _env("MDREAM_EDIT_CKPT", _CKPT_DIR / "hidream_o1_image_bf16.safetensors")
 TOKENIZER_DIRS = [
     p for p in (
         _env("MDREAM_TOKENIZER", COMFYUI / "comfy/text_encoders/qwen25_tokenizer"),
