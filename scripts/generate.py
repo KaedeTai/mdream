@@ -33,9 +33,31 @@ def main() -> int:
     ap.add_argument("--noise", default=None,
                     help="npy file of (1,3,H,W) unit noise, to match another run")
     ap.add_argument("--save-latent", default=None)
+    ap.add_argument("--bits", type=int, default=None, choices=[2, 3, 4, 5, 6, 8],
+                    help="quantise the decoder to this many bits")
+    ap.add_argument("--group-size", type=int, default=64)
+    ap.add_argument("--quantize-embed", action="store_true")
+    ap.add_argument("--save-quantized", default=None,
+                    help="write the quantised weights here and exit")
+    ap.add_argument("--hi-bits", type=int, default=None,
+                    help="bits for the modules named by --hi-modules")
+    ap.add_argument("--hi-modules", default="down_proj",
+                    help="comma-separated path substrings kept at --hi-bits")
     a = ap.parse_args()
 
-    g = Generator(Path(a.ckpt), dtype=getattr(mx, a.dtype))
+    overrides = ({m: {"bits": a.hi_bits} for m in a.hi_modules.split(",")}
+                 if a.hi_bits else None)
+    g = Generator(Path(a.ckpt), dtype=getattr(mx, a.dtype), bits=a.bits,
+                  group_size=a.group_size, quantize_embed=a.quantize_embed,
+                  overrides=overrides)
+    if a.save_quantized:
+        from mdream.quantize import save_quantized
+        assert a.bits, "--save-quantized needs --bits"
+        save_quantized(g.model, a.save_quantized, a.bits, a.group_size,
+                       a.quantize_embed, overrides)
+        print(f"  wrote {a.save_quantized}  {Path(a.save_quantized).stat().st_size / 2**30:.2f} GiB")
+        return 0
+
     img, latent = g.generate(
         a.prompt, width=a.width, height=a.height, steps=a.steps, seed=a.seed,
         sigmas=np.load(a.sigmas) if a.sigmas else None,

@@ -152,7 +152,10 @@ before the next stage is written.
 6. full forward at one timestep, text only — match the velocity prediction (**done**, 8.9e-8)
 7. sampler — match the image at cfg 1.0, fixed seed (**done**, 46.3 dB fp32)
 8. vision tower — match image embeds (needed for the edit path, not for T2I)
-9. only then: quantise, and re-measure against the 8.4 s T2I baseline
+
+Steps 8 and 9 swapped order: quantisation is the whole reason this port exists
+and it only needs the text-to-image path, so it went first.
+9. quantise (**done** — 6-bit is visually identical at 2.18x smaller)
 
 Order changed at milestone 5: the vision tower is only needed for reference-image
 editing, and everything else — conditioning, forward, sampler — can be finished
@@ -254,6 +257,71 @@ The images are visually indistinguishable — same composition, same pose, same
 light; the difference is in fur and twig texture, which is where a chaotic
 trajectory puts it.
 
+## Milestone 9: quantisation, and the one layer that breaks it
+
+`--bits 6` produces images indistinguishable from bf16 at 6.49 GiB instead of
+14.17. That is the headline; the interesting part is 4-bit.
+
+Flat 4-bit affine does not produce noise or artefacts — it produces a
+*systematically darker* image. Three unrelated prompts, same seed, mean pixel
+value of the output:
+
+```
+                    portrait   market   still life      weights
+  bf16                0.3103   0.2587       0.3028     14.17 GiB
+  8-bit g64           0.3105   0.2582       0.3023      8.10
+  6-bit g64           0.3155   0.2576       0.3101      6.49
+  4-bit g64                -        -       0.1311      4.87   <- half as bright
+  4-bit g32                -        -       0.1973      5.27
+  4-bit g64 + down_proj@8   0.3030   0.2229  0.2993     5.71   <- fixed
+```
+
+The weight-error diagnostic says nothing is special: quantise/dequantise every
+projection in all 36 layers and the relative error is 0.099-0.103 across the
+board, `down_proj` only marginally worst. But keeping *only* `down_proj` at 8
+bits restores the brightness completely, at a cost of 0.84 GiB.
+
+That matches something ComfyUI's config already says out loud:
+
+    # fp16 not supported: LM MLP down_proj activations fp16 overflow, causing NaNs
+
+`down_proj` is where the large-magnitude activations live. Weight error is the
+wrong thing to look at for it; what matters is that its *inputs* are large, so
+the same relative weight error produces a much larger absolute output error,
+and a systematic one. In a language model the next softmax hides that. Here the
+residual stream is projected straight to pixels, so it shows up as gain.
+
+So the honest recommendation is not 4-bit:
+
+- **6-bit g64, 6.49 GiB** — visually identical to bf16 across all three test
+  prompts. This is the one to use.
+- **8-bit g64, 8.10 GiB** — identical, if you want no argument at all.
+- **4-bit + `down_proj` at 8-bit, 5.71 GiB** — correct exposure, but a
+  different and consistently *simpler* sample: fewer objects, less background
+  detail. Usable, not equivalent.
+- **flat 4-bit, 4.87 GiB** — do not.
+
+```
+python3 scripts/generate.py x --bits 6 --save-quantized q6.safetensors
+python3 scripts/generate.py "..." --ckpt q6.safetensors -o out.png
+```
+
+The quantisation config travels in the safetensors metadata, so a quantised
+checkpoint reloads without being told what it is, and the round-trip is
+bit-identical to quantising in process.
+
+### What quantisation does *not* buy: speed
+
+At 768x1024 the model runs 805 tokens through 8B parameters every step. That is
+a compute-bound GEMM, not the bandwidth-bound single-token decode that makes
+quantisation fast for LLMs, so there is nothing to win. Measured back-to-back
+and interleaved, bf16 and 4-bit are within a few percent of each other, in both
+directions depending on what else the machine is doing.
+
+Those timings were taken while the machine was also serving an unrelated LLM,
+so they are only good enough to support "no meaningful difference" — not to
+rank the configs. **Memory is the reason to quantise here, not latency.**
+
 ## Layout
 
 ```
@@ -265,6 +333,7 @@ mdream/model.py       the assembled forward pass
 mdream/tokenizer.py   prompt -> input_ids, HiDream-O1's chat template
 mdream/sampling.py    flow schedule, 8x noise scaling, Euler
 mdream/generate.py    the three tied together
+mdream/quantize.py    4/6/8-bit, mixed precision, quantised checkpoints
 scripts/generate.py         CLI
 scripts/compare_vs_comfy.py milestone 7 harness (drives a running ComfyUI)
 notes/reference.md    where the PyTorch reference lives, and what to read

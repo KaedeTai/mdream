@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 
 from . import sampling as S
@@ -44,16 +45,55 @@ def torch_style_noise(shape, seed: int) -> np.ndarray:
 
 class Generator:
     def __init__(self, ckpt: Optional[Path] = None, dtype=mx.bfloat16,
-                 tokenizer_path=None, verbose: bool = True):
+                 tokenizer_path=None, verbose: bool = True,
+                 bits: Optional[int] = None, group_size: int = 64,
+                 quantize_embed: bool = False,
+                 overrides: Optional[dict] = None):
         self.dtype = dtype
         self.verbose = verbose
         ckpt = Path(ckpt) if ckpt is not None else DEFAULT_CKPT
         t0 = time.time()
+        from .quantize import (parameter_bytes, quant_config, quantize_model,
+                               make_predicate, PIXEL_SHIMS)
+        qc = quant_config(ckpt)
+        if qc is not None:
+            # already-quantised checkpoint: build the same shapes, then load
+            self.model = HiDreamO1(TextConfig())
+            nn.quantize(self.model, group_size=qc["group_size"], bits=qc["bits"],
+                        class_predicate=make_predicate(qc["quantize_embed"],
+                                                       qc.get("skip", PIXEL_SHIMS),
+                                                       qc["group_size"],
+                                                       qc.get("overrides")))
+            self.model.load_weights(str(ckpt))
+            mx.eval(self.model.parameters())
+            self.param_bytes = parameter_bytes(self.model)
+            self.quant = (qc["bits"], qc["group_size"], qc["quantize_embed"])
+            self.tokenizer = PromptTokenizer(tokenizer_path)
+            self.model_sampling = S.ModelSamplingDiscreteFlow()
+            if verbose:
+                print(f"  loaded {ckpt.name} ({qc['bits']}-bit g{qc['group_size']}, "
+                      f"{self.param_bytes / 2**30:.2f} GiB) in {time.time() - t0:.1f}s")
+            return
         weights = mx.load(str(ckpt))
         self.model = HiDreamO1(TextConfig())
         load_model(self.model, weights, dtype=dtype)
         mx.eval(self.model.parameters())
         del weights
+        before = parameter_bytes(self.model)
+        if bits is not None:
+            quantize_model(self.model, bits=bits, group_size=group_size,
+                           quantize_embed=quantize_embed, overrides=overrides)
+            after = parameter_bytes(self.model)
+            if verbose:
+                extra = " +embed" if quantize_embed else ""
+                if overrides:
+                    extra += " " + ",".join(f"{k}@{v['bits']}"
+                                            for k, v in overrides.items())
+                print(f"  quantised to {bits}-bit g{group_size}{extra}: "
+                      f"{before / 2**30:.2f} -> {after / 2**30:.2f} GiB "
+                      f"({before / after:.2f}x)")
+        self.param_bytes = parameter_bytes(self.model)
+        self.quant = (bits, group_size, quantize_embed) if bits else None
         self.tokenizer = PromptTokenizer(tokenizer_path)
         self.model_sampling = S.ModelSamplingDiscreteFlow()
         if verbose:
