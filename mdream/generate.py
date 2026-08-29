@@ -212,7 +212,7 @@ class Generator:
              negative_prompt: str = "",
              sampler: str = "dpmpp_2m",
              seam: Optional[str] = "ramp_2_4",
-             seam_start: float = 0.8,
+             seam_start: float = 0.9,
              sigmas: Optional[np.ndarray] = None,
              noise: Optional[np.ndarray] = None,
              match_comfy: bool = False,
@@ -303,8 +303,17 @@ class Generator:
             return v
 
         # Patch-seam smoothing is on by default for editing: the model leaves a
-        # visible 32px grid on skin, and averaging half-patch-shifted passes over
-        # the last fifth of sampling is the only thing that removes it.
+        # visible 32px grid on skin, and averaging half-patch-shifted passes is
+        # the only thing that removes it.
+        #
+        # The window starts at 0.9, not ComfyUI's 0.8, because averaging costs
+        # micro-texture and a shorter window is a better trade. Measured on the
+        # same seed (grid / patch-interior detail / high-frequency energy):
+        #
+        #   no seam          1.200  2.884  3.82   +0 forwards
+        #   start 0.8        1.056  2.531  3.14   +12
+        #   start 0.9        1.061  2.611  3.22   +6     <- default
+        #   a real photo     1.006  3.162  8.10
         smoother = None
         if seam:
             from .seam import SeamSmoother

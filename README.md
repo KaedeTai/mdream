@@ -466,10 +466,32 @@ places and cancel. `ramp_2_4` uses two offsets early in that window and four
 near the end. Rolling wraps, so one patch-width at each border keeps the
 unshifted prediction behind a 4px feather.
 
-It costs +12 forward passes on a 28-step edit, about +20% wall clock, and takes
-the horizontal grid to within a hair of a real photograph. **On by default for
+Averaging is not free: it removes the grid by smoothing, and smoothing also
+costs the micro-texture that makes an image read as a photograph. The whole
+trade-off, same seed, measured as grid ratio / patch-interior detail /
+high-frequency energy:
+
+```
+  no seam                        1.200   2.884   3.82    +0 forwards
+  --seam 2                       1.076   2.633   3.36    +6
+  --seam ramp_2_4 --start 0.8    1.056   2.531   3.14    +12
+  --seam ramp_2_4 --start 0.9    1.061   2.611   3.22    +6    <- default
+  a real photograph              1.006   3.162   8.10
+```
+
+Starting the window at 0.9 rather than ComfyUI's 0.8 removes essentially the
+same grid, keeps more texture, and costs half the passes. **On by default for
 editing** (`--seam off` to disable); off by default for text-to-image, whose
 grid is milder, where it is available as `--seam ramp_2_4`.
+
+Note the last row. Even with no smoothing at all the model puts out less than
+half the high-frequency energy of a real photograph (3.82 against 8.10), which
+is why its output reads as painted rather than photographed. That is structural:
+with no VAE, every pixel comes from a linear projection of one token into a
+32x32x3 patch, and a 4096-wide hidden state is a narrow channel for the
+noise-like micro-texture — grain, pores, subsurface variation — that a latent
+model gets for free from a decoder trained on photographs. Seam smoothing makes
+it slightly worse; it does not cause it.
 
 ## Layout
 
