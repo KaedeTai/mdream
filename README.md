@@ -2,10 +2,18 @@
 
 MLX implementation of **HiDream-O1-Image** for Apple Silicon.
 
-Status: **text-to-image works and matches ComfyUI.** 768x1024, 28 steps, euler,
-cfg 1.0 — `mdream fp32` vs `ComfyUI fp32` is 46.3 dB PSNR on the final latent,
-16.2 dB tighter than the reference's own bf16-vs-fp32 envelope. The vision
-tower (reference-image editing) and quantisation are not done yet.
+Status: **complete for text-to-image and reference-image editing, quantised,
+and matched against ComfyUI at every stage.**
+
+Text-to-image: `mdream fp32` vs `ComfyUI fp32` is 46.3 dB PSNR on the final
+latent, 16.2 dB tighter than the reference's own bf16-vs-fp32 envelope.
+Editing: matches ComfyUI at 1152x1536, and reproduces its failure at 768x1024,
+which turns out to be the model rather than either implementation.
+Quantisation: 6-bit is visually indistinguishable at 6.49 GiB against 14.17,
+and is the thing ComfyUI on MPS cannot do at all.
+
+Not done: the SDE samplers, the patch-seam smoothing ComfyUI offers, and the
+prefix KV cache the reference keeps across sampling steps.
 
 ```
 $ python3 scripts/generate.py "a red fox in fresh snow, golden hour" \
