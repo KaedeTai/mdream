@@ -9,6 +9,7 @@ wrong, it is wrong in a piece that has its own test.
 """
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from typing import Optional
@@ -19,8 +20,10 @@ import numpy as np
 
 from . import sampling as S
 from .conditioning import build_t2i_conds
+from .refimg import build_edit_conds
 from .decoder import TextConfig
 from .model import HiDreamO1, load_model
+from .vision import VisionTower, load_vision
 from .tokenizer import PromptTokenizer
 
 DEFAULT_CKPT = Path.home() / "models/HiDream-O1-Image/checkpoints/hidream_o1_image_dev_bf16.safetensors"
@@ -64,12 +67,23 @@ class Generator:
                                                        qc.get("skip", PIXEL_SHIMS),
                                                        qc["group_size"],
                                                        qc.get("overrides")))
-            self.model.load_weights(str(ckpt))
+            w = mx.load(str(ckpt))
+            self.model.load_weights([(k, v) for k, v in w.items()
+                                     if not k.startswith("visual.")])
             mx.eval(self.model.parameters())
+            if qc.get("has_vision_tower"):
+                tw = VisionTower()
+                tw.load_weights([(k[len("visual."):], v) for k, v in w.items()
+                                 if k.startswith("visual.")])
+                mx.eval(tw.parameters())
+                self._packed_tower = tw
+            del w
             self.param_bytes = parameter_bytes(self.model)
             self.quant = (qc["bits"], qc["group_size"], qc["quantize_embed"])
             self.tokenizer = PromptTokenizer(tokenizer_path)
             self.model_sampling = S.ModelSamplingDiscreteFlow()
+            self.ckpt = ckpt
+            self._tower = getattr(self, "_packed_tower", None)
             if verbose:
                 print(f"  loaded {ckpt.name} ({qc['bits']}-bit g{qc['group_size']}, "
                       f"{self.param_bytes / 2**30:.2f} GiB) in {time.time() - t0:.1f}s")
@@ -96,6 +110,8 @@ class Generator:
         self.quant = (bits, group_size, quantize_embed) if bits else None
         self.tokenizer = PromptTokenizer(tokenizer_path)
         self.model_sampling = S.ModelSamplingDiscreteFlow()
+        self.ckpt = ckpt
+        self._tower = None
         if verbose:
             print(f"  loaded {ckpt.name} in {time.time() - t0:.1f}s")
 
@@ -153,6 +169,123 @@ class Generator:
         mx.eval(x)
         total = time.time() - t_start
         if self.verbose:
+            print(f"  {total:.1f}s total, {total / (len(sigmas) - 1):.2f}s/step")
+
+        latent = np.array(x, dtype=np.float32)
+        img = S.to_image(latent)[0]
+        return (img, latent) if return_latent else img
+
+
+    def tower(self) -> VisionTower:
+        """The vision tower, loaded on first use.
+
+        Text-to-image never touches it, and it is a separate 0.9 GiB, so it
+        stays out of the way until an edit asks for it.
+        """
+        if self._tower is None:
+            t0 = time.time()
+            w = mx.load(str(self.ckpt))
+            tw = VisionTower()
+            load_vision(tw, w, dtype=self.dtype)
+            mx.eval(tw.parameters())
+            del w
+            self._tower = tw
+            if self.verbose:
+                print(f"  vision tower loaded in {time.time() - t0:.1f}s")
+        return self._tower
+
+    def edit(self, prompt: str, refs, width: int = 768, height: int = 1024,
+             steps: int = 28, seed: int = 0, cfg: float = 5.0,
+             negative_prompt: str = "",
+             sampler: str = "dpmpp_2m",
+             sigmas: Optional[np.ndarray] = None,
+             noise: Optional[np.ndarray] = None,
+             match_comfy: bool = False,
+             return_latent: bool = False):
+        """Reference-image editing.
+
+        `refs` are (H, W, 3) float arrays in [0, 1]. The vision tower runs once
+        for the whole generation, not once per step -- its output does not
+        depend on sigma, and recomputing it 28 times would roughly double the
+        cost of an edit.
+        """
+        assert width % 32 == 0 and height % 32 == 0, "patch size is 32"
+        if width * height < 1_700_000 and self.verbose:
+            print(f"  WARNING: {width}x{height} is {width * height / 1e6:.2f} MP. "
+                  "The edit path collapses to noise below ~1.7 MP -- ComfyUI does "
+                  "the same, at every sampler, cfg and checkpoint. Use 1152x1536 "
+                  "or larger.")
+        from .refimg import prepare_ref_images
+        ids = self.tokenizer.encode(prompt)
+        ref = prepare_ref_images(refs, height, width, match_comfy=match_comfy)
+        conds = build_edit_conds(ids, height, width, refs, match_comfy=match_comfy,
+                                 ref=ref)
+        # cfg 1.0 is not a usable setting for editing: ComfyUI itself returns
+        # pure noise there. The uncond pass is built whenever cfg != 1.
+        unc = None
+        if not math.isclose(cfg, 1.0):
+            unc = build_edit_conds(self.tokenizer.encode(negative_prompt),
+                                   height, width, refs,
+                                   match_comfy=match_comfy, ref=ref)
+        if sigmas is None:
+            sigmas = S.normal_schedule(self.model_sampling, steps)
+        if noise is None:
+            noise = torch_style_noise((1, 3, height, width), seed)
+
+        x = mx.array(S.initial_noise_scaling(float(sigmas[0]), noise,
+                                             np.zeros_like(noise),
+                                             self.model_sampling.noise_scale),
+                     dtype=mx.float32)
+
+        t_vit = time.time()
+        image_embeds = self.tower()(mx.array(conds["ref_pixel_values"]),
+                                    conds["ref_image_grid_thw"],
+                                    compute_dtype=self.dtype)
+        mx.eval(image_embeds)
+        t_vit = time.time() - t_vit
+
+        ids_mx = mx.array(conds["input_ids"])
+        pos_mx = mx.array(conds["position_ids"])
+        ref_patches = mx.array(conds["ref_patches"])
+        seq_len = conds["input_ids_pad"].shape[1]
+        cache = self.model.prepare(pos_mx, mx.array(conds["vinput_mask"]),
+                                   conds["ar_len"], conds["image_len"], seq_len,
+                                   self.dtype)
+        if self.verbose:
+            print(f"  {width}x{height}  {seq_len} sequence "
+                  f"({conds['image_len']} target + {ref_patches.shape[1]} ref patches"
+                  f" + {image_embeds.shape[0]} ViT tokens)   "
+                  f"{len(sigmas) - 1} steps  seed {seed}   ViT {t_vit:.1f}s")
+
+        t_start = time.time()
+
+        if unc is not None:
+            unc_ids = mx.array(unc["input_ids"])
+            unc_pos = mx.array(unc["position_ids"])
+            unc_cache = self.model.prepare(
+                unc_pos, mx.array(unc["vinput_mask"]), unc["ar_len"],
+                unc["image_len"], unc["input_ids_pad"].shape[1], self.dtype)
+
+        def net(xc, sigma, i):
+            t = mx.array([sigma * self.model_sampling.multiplier], dtype=mx.float32)
+            v = self.model(xc, t, ids_mx, pos_mx, None, conds["ar_len"],
+                           compute_dtype=self.dtype, cache=cache,
+                           ref_patches=ref_patches, image_embeds=image_embeds)
+            if unc is not None:
+                vu = self.model(xc, t, unc_ids, unc_pos, None, unc["ar_len"],
+                                compute_dtype=self.dtype, cache=unc_cache,
+                                ref_patches=ref_patches, image_embeds=image_embeds)
+                # denoised = x - v * sigma is affine in v, so combining the
+                # velocities is the same as ComfyUI combining the denoised
+                # predictions -- one fewer place to get a sign wrong.
+                v = vu + (v - vu) * cfg
+            mx.eval(v)
+            return v
+
+        x = S.SAMPLERS[sampler](net, x, sigmas)
+        mx.eval(x)
+        if self.verbose:
+            total = time.time() - t_start
             print(f"  {total:.1f}s total, {total / (len(sigmas) - 1):.2f}s/step")
 
         latent = np.array(x, dtype=np.float32)

@@ -136,3 +136,47 @@ def to_image(x: np.ndarray) -> np.ndarray:
     (-1..1 -> 0..1) and to uint8. x is (B, 3, H, W)."""
     img = np.clip((x.astype(np.float32) + 1.0) / 2.0, 0.0, 1.0)
     return (img.transpose(0, 2, 3, 1) * 255.0 + 0.5).astype(np.uint8)
+
+
+def sample_dpmpp_2m(model: Callable, x, sigmas: np.ndarray, callback=None):
+    """DPM-Solver++(2M), ported from comfy.k_diffusion.sampling.
+
+    Needed because Euler is not enough for the reference-image edit path: at
+    cfg 5 it resolves the subject and leaves the background as noise. This is
+    the deterministic multistep solver; the SDE variant ComfyUI defaults to
+    additionally injects Brownian-tree noise, which is not reproduced here.
+
+    Written against `denoised` rather than the velocity, like the original, so
+    the second-order term averages the two quantities the solver is derived
+    for.
+    """
+    sigmas = np.asarray(sigmas, dtype=np.float32)
+    old_denoised = None
+    t_prev = None
+    for i in range(len(sigmas) - 1):
+        sigma, sigma_next = float(sigmas[i]), float(sigmas[i + 1])
+        v = model(x, sigma, i)
+        denoised = calculate_denoised(sigma, v, x)
+        if callback is not None:
+            callback(i, sigma, x, denoised)
+
+        if sigma_next == 0.0:
+            x = denoised
+            old_denoised, t_prev = denoised, -math.log(sigma)
+            continue
+
+        t, t_next = -math.log(sigma), -math.log(sigma_next)
+        h = t_next - t
+        ratio = sigma_next / sigma            # == sigma_fn(t_next) / sigma_fn(t)
+        expm1 = math.expm1(-h)
+        if old_denoised is None:
+            x = ratio * x - expm1 * denoised
+        else:
+            r = (t - t_prev) / h
+            d = (1 + 1 / (2 * r)) * denoised - (1 / (2 * r)) * old_denoised
+            x = ratio * x - expm1 * d
+        old_denoised, t_prev = denoised, t
+    return x
+
+
+SAMPLERS = {"euler": sample_euler, "dpmpp_2m": sample_dpmpp_2m}

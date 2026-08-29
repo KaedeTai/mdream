@@ -23,11 +23,26 @@ from typing import Optional
 import mlx.core as mx
 import mlx.nn as nn
 
-from .conditioning import TMS_TOKEN_ID
+import numpy as np
+
+from .conditioning import IMAGE_TOKEN_ID, TMS_TOKEN_ID
 from .decoder import Decoder, TextConfig, precompute_freqs_cis, two_pass_mask
 from .layers import BottleneckPatchEmbed, FinalLayer, TimestepEmbedder, patchify, unpatchify
 
 PATCH_SIZE = 32
+
+
+def scatter_rows(dst: mx.array, mask: mx.array, rows: mx.array) -> mx.array:
+    """Write `rows` into `dst` (1, T, D) at the True positions of `mask` (T,).
+
+    MLX has no in-place index assignment, so this is done as a gather plus a
+    select: `cumsum(mask) - 1` gives, at every position, the index of the row
+    that belongs there, and `where` keeps it only where the mask says so. The
+    True positions are consumed in order, which is what the reference's
+    `inputs_embeds[:, image_idx] = image_embeds` does.
+    """
+    order = mx.maximum(mx.cumsum(mask.astype(mx.int32)) - 1, 0)
+    return mx.where(mask[None, :, None], mx.take(rows, order, axis=0)[None], dst)
 
 
 class HiDreamO1(nn.Module):
@@ -67,13 +82,35 @@ class HiDreamO1(nn.Module):
 
     def __call__(self, x: mx.array, timesteps: mx.array, input_ids: mx.array,
                  position_ids: mx.array, vinput_mask: mx.array, ar_len: int,
-                 compute_dtype=mx.bfloat16, cache: Optional[dict] = None) -> mx.array:
+                 compute_dtype=mx.bfloat16, cache: Optional[dict] = None,
+                 ref_patches: Optional[mx.array] = None,
+                 image_embeds: Optional[mx.array] = None) -> mx.array:
+        """`ref_patches` and `image_embeds` are the edit path.
+
+        A reference image enters twice and in two different currencies: as
+        32x32 raw patches appended to the noised target's patch stream, and as
+        vision-tower tokens scattered into the text sequence at the
+        <|image_pad|> positions. The pixel half is longer than the target as a
+        result, which is why the target slice below takes only the first
+        `tgt_len` vision positions and drops the rest.
+        """
         B, _, H, W = x.shape
         h_p, w_p = H // self.patch_size, W // self.patch_size
         tgt_len = h_p * w_p
 
         z = patchify(x, self.patch_size).astype(compute_dtype)
+        if ref_patches is not None:
+            z = mx.concatenate([z, ref_patches.astype(compute_dtype)], axis=1)
         emb = self.embed_tokens(input_ids).astype(compute_dtype)
+
+        if image_embeds is not None:
+            is_pad = (input_ids[0] == IMAGE_TOKEN_ID)
+            n_pad = int(np.asarray(is_pad).sum())
+            if n_pad != image_embeds.shape[0]:
+                raise ValueError(
+                    f"image_pad count {n_pad} != vision tower output "
+                    f"{image_embeds.shape[0]}; preprocessing is misaligned")
+            emb = scatter_rows(emb, is_pad, image_embeds.astype(compute_dtype))
 
         sigma = timesteps.astype(mx.float32) / 1000.0
         t_emb = self.t_embedder(((1.0 - sigma) * 1000.0)).astype(compute_dtype)

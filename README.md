@@ -151,7 +151,8 @@ before the next stage is written.
 5. T2I conditioning — position ids, masks, ar_len (**done**, exact)
 6. full forward at one timestep, text only — match the velocity prediction (**done**, 8.9e-8)
 7. sampler — match the image at cfg 1.0, fixed seed (**done**, 46.3 dB fp32)
-8. vision tower — match image embeds (**done**, exact stage by stage on CPU)
+8. vision tower and the edit path — image embeds, preprocessing, CFG, and a
+   working reference-image edit (**done**)
 
 Steps 8 and 9 swapped order: quantisation is the whole reason this port exists
 and it only needs the text-to-image path, so it went first.
@@ -322,6 +323,73 @@ Those timings were taken while the machine was also serving an unrelated LLM,
 so they are only good enough to support "no meaningful difference" — not to
 rank the configs. **Memory is the reason to quantise here, not latency.**
 
+## Milestone 8: the edit path, and the bug that was not mine
+
+The vision tower ported cleanly (exact stage by stage on CPU; see
+`tests/test_vision.py`). The preprocessing took longer, and finding out why was
+the useful part.
+
+### One uint8 level moves the embeddings by 5%
+
+A reference image is resized three times before the model sees it — bicubic to
+a patch-aligned box, **PIL lanczos** for the ViT branch, bilinear inside the
+Qwen2-VL processor — and the lanczos step round-trips through uint8. mdream's
+bicubic accumulates in float64 and is *more* accurate than torch's float32, so
+6.8% of pixels landed on the other side of that rounding boundary. Not a bug,
+and it would normally not matter. It matters here:
+
+```
+  input perturbation      cos(embeddings)
+        1e-5                 0.999966
+        1e-4                 0.999325
+        1e-3                 0.994416
+     7.8e-3 (= 1 level)      0.927808
+```
+
+The tower is a high-gain feature extractor. mdream's tower against ComfyUI's on
+*identical* pixels is cos 1.0000002 — but feed it pixels one uint8 level apart
+and the embeddings move 5%. So `prepare_ref_images(match_comfy=True)` routes
+the two interpolations through torch and reproduces ComfyUI's inputs
+bit-for-bit; `tests/test_refimg.py` then matches every tensor exactly, integers
+and floats alike.
+
+### The edit path collapses below ~1.7 megapixels
+
+The first end-to-end edit came out as pure noise. Before touching the port, the
+control: **ComfyUI, same checkpoint, same sampler, same seed, same 768x1024
+canvas — also pure noise.** Then everything else was varied:
+
+```
+  768x1024 (0.79 MP), reference image, seed 42
+    dev,  euler,             cfg 1.0    pure noise
+    dev,  euler,             cfg 5.0    subject correct, background noise
+    dev,  dpmpp_2m,          cfg 5.0    subject correct, background noise
+    dev,  dpmpp_2m_sde_gpu,  cfg 5.0    pure noise
+    dev,  dpmpp_2m_sde + seam smoothing, 40 steps   background noise
+    base, dpmpp_2m,          cfg 5.0    background noise, face damaged
+  1152x1536 (1.77 MP)
+    dev,  dpmpp_2m,          cfg 5.0    clean
+```
+
+ComfyUI's own node says the model was trained at ~4 MP and that lower
+resolutions "regress noticeably". They do not regress; below ~1.7 MP the edit
+path collapses. Text-to-image at 768x1024 is fine — the failure is specific to
+carrying a reference image.
+
+mdream reproduces the collapse faithfully at 768x1024 and produces a clean,
+ComfyUI-matching edit at 1152x1536, which is what a correct port should do.
+`Generator.edit` warns below 1.7 MP.
+
+Two things the edit path needs that text-to-image does not:
+
+- **CFG.** cfg 1.0 is noise. The two velocity predictions are combined
+  directly, `v = v_uncond + (v_cond - v_uncond) * cfg`, which is identical to
+  ComfyUI combining the denoised predictions because `denoised = x - v*sigma`
+  is affine in `v`.
+- **DPM-Solver++(2M).** Euler leaves more background damage. The SDE variant
+  ComfyUI defaults to is *worse* here and is not ported: its Brownian-tree
+  noise is not reproducible without torchsde.
+
 ## Layout
 
 ```
@@ -335,7 +403,10 @@ mdream/sampling.py    flow schedule, 8x noise scaling, Euler
 mdream/generate.py    the three tied together
 mdream/quantize.py    4/6/8-bit, mixed precision, quantised checkpoints
 mdream/vision.py      Qwen3-VL vision tower, for the reference-image path
+mdream/resample.py    bicubic / bilinear / lanczos, matched to torch and PIL
+mdream/refimg.py      reference-image preprocessing and the edit sequence
 scripts/generate.py         CLI
+scripts/edit.py             reference-image editing CLI
 scripts/compare_vs_comfy.py milestone 7 harness (drives a running ComfyUI)
 notes/reference.md    where the PyTorch reference lives, and what to read
 notes/precision.md    measured precision floors; where tolerances come from
@@ -348,6 +419,8 @@ tests/test_forward.py        milestone 6, whole forward on a small synthetic mod
 tests/test_forward_real.py   milestone 6b, real 8B weights load where they belong
 tests/test_sampling.py       milestone 7a, schedule/tokenizer/Euler vs ComfyUI
 tests/test_vision.py         milestone 8, the vision tower, stage by stage
+tests/test_resample.py       milestone 8b, resamplers vs torch and PIL
+tests/test_refimg.py         milestone 8c, ref preprocessing, bit-identical
 ```
 
 ## Reference

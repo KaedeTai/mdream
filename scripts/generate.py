@@ -54,7 +54,7 @@ def main() -> int:
         from mdream.quantize import save_quantized
         assert a.bits, "--save-quantized needs --bits"
         save_quantized(g.model, a.save_quantized, a.bits, a.group_size,
-                       a.quantize_embed, overrides)
+                       a.quantize_embed, overrides, tower=g.tower())
         print(f"  wrote {a.save_quantized}  {Path(a.save_quantized).stat().st_size / 2**30:.2f} GiB")
         return 0
 

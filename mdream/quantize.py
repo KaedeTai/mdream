@@ -84,7 +84,8 @@ def parameter_bytes(model: nn.Module) -> int:
 
 def save_quantized(model: nn.Module, path, bits: int, group_size: int,
                    quantize_embed: bool = False,
-                   overrides: Optional[dict] = None) -> None:
+                   overrides: Optional[dict] = None,
+                   tower: Optional[nn.Module] = None) -> None:
     """Write a quantised checkpoint plus the metadata needed to rebuild it.
 
     The quantisation config has to travel with the weights: `nn.quantize` has
@@ -97,10 +98,19 @@ def save_quantized(model: nn.Module, path, bits: int, group_size: int,
     from mlx.utils import tree_flatten
     flat = {k: v for k, v in tree_flatten(model.parameters())
             if isinstance(v, mx.array)}
+    if tower is not None:
+        # The vision tower rides along unquantised. It is 0.9 GiB against the
+        # decoder's 14.2, and it is the most input-sensitive part of the model
+        # (one uint8 level of preprocessing difference moves its embeddings by
+        # 5%), so shaving 0.6 GiB off it is a bad trade. Without it here, a
+        # quantised checkpoint simply cannot do reference-image edits.
+        flat.update({"visual." + k: v for k, v in tree_flatten(tower.parameters())
+                     if isinstance(v, mx.array)})
     meta = {"mdream_quant": json.dumps({
         "bits": bits, "group_size": group_size,
         "quantize_embed": quantize_embed, "skip": list(PIXEL_SHIMS),
         "overrides": overrides or {},
+        "has_vision_tower": tower is not None,
     })}
     mx.save_safetensors(str(path), flat, metadata=meta)
 
