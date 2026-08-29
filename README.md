@@ -14,8 +14,8 @@ Quantisation: works (6-bit is visually indistinguishable at 6.49 GiB against
 and the memory it saves is only worth having on a machine that cannot hold
 bf16. See milestone 9.
 
-Not done: the SDE samplers, the patch-seam smoothing ComfyUI offers, and the
-prefix KV cache the reference keeps across sampling steps.
+Not done: the SDE samplers, and the prefix KV cache the reference keeps across
+sampling steps.
 
 ```
 $ python3 scripts/generate.py "a red fox in fresh snow, golden hour" \
@@ -437,6 +437,40 @@ on the face. Distillation evidently costs the top of the frequency range, and
 a pixel-space model has nowhere to hide it.
 
 `dev` remains the default for text-to-image, where it is fine and cheaper.
+
+### The patch grid, and removing it
+
+HiDream-O1 writes its output one 32x32 patch at a time and the patches do not
+quite agree at their borders, so photographic skin comes out with a visible
+grid. Measured as gradient energy on the patch boundaries over gradient energy
+everywhere else — 1.0 would be no grid at all:
+
+```
+  a real photograph                        1.019 / 0.993
+  mdream bf16, no smoothing                1.232 / 1.169
+  ComfyUI bf16, no smoothing               1.254 / 1.185   <- the model's own seam
+  mdream bf16 + seam smoothing ramp_2_4    1.087 / 1.024
+  mdream 6-bit, no smoothing               1.634 / 1.384   <- quantisation triples it
+```
+
+Two things fall out. mdream's grid is the model's, not the port's — it sits
+marginally *below* ComfyUI's. And **6-bit roughly triples it**: the excess over
+1.0 goes from +0.23 to +0.63. That is mechanical rather than mysterious. The
+output is produced per token, one patch each, so a per-token error lands
+exactly on patch boundaries. `final_layer` is never quantised, but the decoder
+hidden states feeding it are.
+
+`mdream/seam.py` ports ComfyUI's `HiDreamO1PatchSeamSmoothing`: over the last
+fifth of sampling, run the model again on an `x` rolled by half a patch, roll
+the prediction back, and average, so the two runs put their seams in different
+places and cancel. `ramp_2_4` uses two offsets early in that window and four
+near the end. Rolling wraps, so one patch-width at each border keeps the
+unshifted prediction behind a 4px feather.
+
+It costs +12 forward passes on a 28-step edit, about +20% wall clock, and takes
+the horizontal grid to within a hair of a real photograph. **On by default for
+editing** (`--seam off` to disable); off by default for text-to-image, whose
+grid is milder, where it is available as `--seam ramp_2_4`.
 
 ## Layout
 

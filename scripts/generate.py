@@ -37,6 +37,9 @@ def main() -> int:
                     help="quantise the decoder to this many bits")
     ap.add_argument("--group-size", type=int, default=64)
     ap.add_argument("--quantize-embed", action="store_true")
+    ap.add_argument("--seam", default=None,
+                    choices=["2", "4", "ramp_2_4", "ramp_2_4_8"],
+                    help="patch-seam smoothing; off by default for text-to-image")
     ap.add_argument("--save-quantized", default=None,
                     help="write the quantised weights here and exit")
     ap.add_argument("--hi-bits", type=int, default=None,
@@ -60,6 +63,7 @@ def main() -> int:
 
     img, latent = g.generate(
         a.prompt, width=a.width, height=a.height, steps=a.steps, seed=a.seed,
+        seam=a.seam,
         sigmas=np.load(a.sigmas) if a.sigmas else None,
         noise=np.load(a.noise) if a.noise else None,
         return_latent=True,

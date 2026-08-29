@@ -117,6 +117,7 @@ class Generator:
 
     def generate(self, prompt: str, width: int = 1024, height: int = 1024,
                  steps: int = 28, seed: int = 0,
+                 seam: Optional[str] = None, seam_start: float = 0.8,
                  sigmas: Optional[np.ndarray] = None,
                  noise: Optional[np.ndarray] = None,
                  return_latent: bool = False):
@@ -165,6 +166,18 @@ class Generator:
                 print(f"    step {i + 1:>3}/{len(sigmas) - 1}  sigma {sigma:7.4f}  "
                       f"{now - prev:5.2f}s", flush=True)
 
+        # Off by default here: text-to-image carries a milder grid than editing
+        # (+0.10/+0.21 against a photograph's +0.02) and this costs ~20% more
+        # forwards. Pass seam="ramp_2_4" when the output is a large flat surface.
+        if seam:
+            from .seam import SeamSmoother
+            smoother = SeamSmoother(shift=self.model_sampling.shift,
+                                    start_percent=seam_start, passes=seam)
+            base_net = net
+
+            def net(xc, sigma, i, _s=smoother, _n=base_net):   # noqa: F811
+                return _s(_n, xc, sigma, i)
+
         x = S.sample_euler(net, x, sigmas, callback=cb)
         mx.eval(x)
         total = time.time() - t_start
@@ -198,6 +211,8 @@ class Generator:
              steps: int = 28, seed: int = 0, cfg: float = 5.0,
              negative_prompt: str = "",
              sampler: str = "dpmpp_2m",
+             seam: Optional[str] = "ramp_2_4",
+             seam_start: float = 0.8,
              sigmas: Optional[np.ndarray] = None,
              noise: Optional[np.ndarray] = None,
              match_comfy: bool = False,
@@ -287,11 +302,25 @@ class Generator:
             mx.eval(v)
             return v
 
+        # Patch-seam smoothing is on by default for editing: the model leaves a
+        # visible 32px grid on skin, and averaging half-patch-shifted passes over
+        # the last fifth of sampling is the only thing that removes it.
+        smoother = None
+        if seam:
+            from .seam import SeamSmoother
+            smoother = SeamSmoother(shift=self.model_sampling.shift,
+                                    start_percent=seam_start, passes=seam)
+            base_net = net
+
+            def net(xc, sigma, i, _s=smoother, _n=base_net):   # noqa: F811
+                return _s(_n, xc, sigma, i)
+
         x = S.SAMPLERS[sampler](net, x, sigmas)
         mx.eval(x)
         if self.verbose:
             total = time.time() - t_start
-            print(f"  {total:.1f}s total, {total / (len(sigmas) - 1):.2f}s/step")
+            extra = f", +{smoother.extra_calls} seam passes" if smoother else ""
+            print(f"  {total:.1f}s total, {total / (len(sigmas) - 1):.2f}s/step{extra}")
 
         latent = np.array(x, dtype=np.float32)
         img = S.to_image(latent)[0]

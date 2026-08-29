@@ -51,6 +51,12 @@ def main() -> int:
     ap.add_argument("--ckpt", default=str(DEFAULT_EDIT_CKPT),
                     help="defaults to the BASE checkpoint: the distilled dev one "
                          "wrecks skin (see README)")
+    ap.add_argument("--seam", default="ramp_2_4",
+                    choices=["2", "4", "ramp_2_4", "ramp_2_4_8", "off"],
+                    help="patch-seam smoothing over the last of sampling "
+                         "(default ramp_2_4); 'off' to disable")
+    ap.add_argument("--seam-start", type=float, default=0.8,
+                    help="sampling progress at which seam smoothing turns on")
     ap.add_argument("--match-comfy", action="store_true",
                     help="route the preprocessing resizes through torch, "
                          "bit-identical to ComfyUI")
@@ -61,7 +67,9 @@ def main() -> int:
     g = Generator(Path(a.ckpt))
     img = g.edit(a.prompt, refs, width=a.width, height=a.height, steps=a.steps,
                  seed=a.seed, cfg=a.cfg, negative_prompt=a.negative,
-                 sampler=a.sampler, match_comfy=a.match_comfy)
+                 sampler=a.sampler, match_comfy=a.match_comfy,
+                 seam=None if a.seam == "off" else a.seam,
+                 seam_start=a.seam_start)
     Image.fromarray(img).save(a.out)
     print(f"  wrote {a.out}  {img.shape[1]}x{img.shape[0]}")
     return 0
