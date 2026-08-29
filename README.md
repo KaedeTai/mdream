@@ -77,9 +77,9 @@ vision tower and no MRoPE**. So the reusable part is smaller than it looks:
 
 | piece | status |
 |---|---|
-| Qwen3 decoder block, RMSNorm, SwiGLU, GQA | reusable from mlx_lm |
-| interleaved MRoPE, rope_dims [24,20,20] | **write** |
-| gemma3-style q/k norm | **write** |
+| Qwen3 decoder block, RMSNorm, SwiGLU, GQA | **done** — 1.09e-6 on CPU |
+| interleaved MRoPE, rope_dims [24,20,20] | **done** — 9.4e-7 |
+| gemma3-style q/k norm | **done** |
 | Qwen3-VL vision tower (27 blocks) | **write** |
 | two-pass attention (causal prefix + full gen) | **write** |
 | patch embed / final layer / timestep embed | **write** (trivial) |
@@ -125,8 +125,8 @@ numerically against ComfyUI on the same machine, same weights, same inputs,
 before the next stage is written.
 
 1. weight audit — every one of the 758 tensors assigned to a module (**done**)
-2. patch embed + final layer — match on random input (**done**, see below)
-3. one decoder layer — match hidden states
+2. patch embed + final layer — match on random input (**done**)
+3. one decoder layer — match hidden states (**done**, 1.09e-6 on CPU)
 4. full decoder, no vision — match hidden states at every layer
 5. vision tower — match image embeds
 6. full forward at one timestep — match the velocity prediction
@@ -155,14 +155,28 @@ patchify / unpatchify  0.000e+00    exact, checked against einops
 The patch ordering is the one that had to be exact rather than close, since a
 wrong ordering corrupts everything downstream while looking like a model bug.
 
+Milestone 3 forced a better testing rule. The block first came in at 2.3e-3 —
+above the single-tensor floor — and the useful question was whether that was a
+bug or the framework. Running the identical MLX code on **CPU** answered it:
+**1.09e-6**. MLX's CPU GEMM is accurate, so logic errors cannot hide there; the
+GPU gap is purely Metal's fp32 matmul. And the bar for the GPU path is not the
+single-tensor floor either — it is what the reference itself loses in bf16 on
+the same block, measured inside the test at **7.8e-3**. mdream's GPU path sits
+3.4x inside that.
+
+So every milestone from here runs twice: **CPU at fp32 tolerance to prove the
+arithmetic, GPU against a measured bf16 envelope to prove the shipped path.**
+
 ## Layout
 
 ```
 mdream/weights.py     checkpoint inspection and key -> module mapping
 mdream/layers.py      pixel shims: patch embed, final layer, timestep embed
+mdream/decoder.py     Qwen3-VL decoder: MRoPE, GQA attention, SwiGLU block
 notes/reference.md    where the PyTorch reference lives, and what to read
 notes/precision.md    measured precision floors; where tolerances come from
-tests/test_shims.py   milestone 2 parity check
+tests/test_shims.py          milestone 2 parity check
+tests/test_decoder_layer.py  milestone 3, against ComfyUI's own TransformerBlock
 ```
 
 ## Reference

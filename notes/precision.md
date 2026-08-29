@@ -34,6 +34,26 @@ threshold. A check that comes in at 1e-6 is reported as such; one that creeps to
 1e-3 is still "passing" but worth looking at, because it means something is
 being computed differently even if the output is usable.
 
+## Per-module envelopes, measured not assumed
+
+The single-tensor bf16 round-trip (2.0e-3) is the floor for one value. A module
+with several chained matmuls tolerates more, and the honest bar is whatever the
+reference itself loses when run in bf16. Measured on one decoder layer:
+
+| | |
+|---|---|
+| reference bf16 vs the same reference in fp32 | **5.97e-3** |
+| mdream on GPU (fp32) vs reference fp32 | 1.33e-3 |
+| mdream on **CPU** (fp32) vs reference fp32 | **1.09e-6** |
+
+The CPU number is the one that says the port is right — MLX's CPU GEMM is
+accurate, so a logic error cannot hide behind framework noise there. The GPU
+number is 4.5x tighter than the precision deployment already accepts.
+
+So each milestone runs twice: **CPU at fp32 tolerance to prove the arithmetic,
+GPU against the measured bf16 envelope to prove the shipped path.** The envelope
+is computed inside the test rather than hardcoded, so it tracks the module.
+
 Exception: the reference explicitly keeps the final `(x - x_pred) / sigma` in
 **fp32**, with a comment that bf16 there noticeably degrades samples. That step
 is held to fp32 tolerances, not bf16 ones.
