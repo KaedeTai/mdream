@@ -81,7 +81,7 @@ vision tower and no MRoPE**. So the reusable part is smaller than it looks:
 | interleaved MRoPE, rope_dims [24,20,20] | **done** — 9.4e-7 |
 | gemma3-style q/k norm | **done** |
 | Qwen3-VL vision tower (27 blocks) | **write** |
-| two-pass attention (causal prefix + full gen) | **write** |
+| two-pass attention (causal prefix + full gen) | **done** — 1.2e-7, prefix isolation exact |
 | patch embed / final layer / timestep embed | **write** (trivial) |
 | flow sampler, sigma schedule, conditioning | **write** |
 | tokenizer / processor | reuse HF |
@@ -127,7 +127,7 @@ before the next stage is written.
 1. weight audit — every one of the 758 tensors assigned to a module (**done**)
 2. patch embed + final layer — match on random input (**done**)
 3. one decoder layer — match hidden states (**done**, 1.09e-6 on CPU)
-4. full decoder, no vision — match hidden states at every layer
+4. full decoder, no vision — match hidden states at every layer (**done**, worst layer 2.8e-6)
 5. vision tower — match image embeds
 6. full forward at one timestep — match the velocity prediction
 7. sampler — match the image bit-for-bit at cfg 1.0, fixed seed
@@ -166,6 +166,22 @@ the same block, measured inside the test at **7.8e-3**. mdream's GPU path sits
 
 So every milestone from here runs twice: **CPU at fp32 tolerance to prove the
 arithmetic, GPU against a measured bf16 envelope to prove the shipped path.**
+
+Milestone 4 showed how wide that envelope really is. Streaming all 36 layers and
+carrying three hidden states — mdream fp32, reference fp32, reference bf16 —
+gives:
+
+```
+worst single layer, synced      2.756e-06
+mdream free-running, 36 layers  5.567e-04
+reference bf16, 36 layers       1.173e+00   <- what the stack actually runs at
+```
+
+The reference's own bf16 hidden states diverge from its fp32 self by more than
+100% relative by layer 36. The model is evidently robust to that — it makes good
+images — but it means **hidden-state parity is only meaningful against fp32**.
+Later milestones, and especially quantisation, have to be judged on the output
+image, not on matching activations.
 
 ## Layout
 

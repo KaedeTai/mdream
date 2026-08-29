@@ -186,3 +186,46 @@ def load_layer(block: TransformerBlock, weights: dict, prefix: str, dtype=mx.flo
     m.gate_proj.weight = g("mlp.gate_proj.weight")
     m.up_proj.weight = g("mlp.up_proj.weight")
     m.down_proj.weight = g("mlp.down_proj.weight")
+
+
+def two_pass_mask(ar_len: int, T: int, dtype=mx.float32) -> Optional[mx.array]:
+    """Additive mask for HiDream's split sequence.
+
+    Positions [0, ar_len) are autoregressive and see only themselves and earlier;
+    positions [ar_len, T) are the generation half and see everything. ComfyUI
+    avoids materialising this by splitting Q at the boundary and running two
+    attention calls — worth doing here too at real sequence lengths, but for
+    correctness testing an explicit mask is the unambiguous statement of intent.
+    """
+    if ar_len <= 0:
+        return None
+    if ar_len >= T:
+        return "causal"
+    rows = mx.arange(T)[:, None]
+    cols = mx.arange(T)[None, :]
+    allowed = (rows >= ar_len) | (cols <= rows)      # gen rows see all; ar rows causal
+    neg = mx.array(-1e9, dtype=dtype)
+    return mx.where(allowed, mx.zeros((T, T), dtype=dtype), neg)[None, None]
+
+
+class Decoder(nn.Module):
+    """The 36-layer Qwen3-VL stack. Embeddings are looked up outside, because
+    HiDream scatters image embeds and the timestep embedding into them first."""
+
+    def __init__(self, cfg: TextConfig):
+        super().__init__()
+        self.cfg = cfg
+        self.layers = [TransformerBlock(cfg) for _ in range(cfg.num_hidden_layers)]
+        self.norm = RMSNorm(cfg.hidden_size, cfg.rms_norm_eps)
+
+    def __call__(self, h: mx.array, freqs_cis, mask=None) -> mx.array:
+        for layer in self.layers:
+            h = layer(h, freqs_cis, mask)
+        return self.norm(h)
+
+
+def load_decoder(dec: Decoder, weights: dict, dtype=mx.bfloat16,
+                 prefix: str = "model.language_model.") -> None:
+    for i, layer in enumerate(dec.layers):
+        load_layer(layer, weights, f"{prefix}layers.{i}.", dtype)
+    dec.norm.weight = weights[f"{prefix}norm.weight"].astype(dtype)
