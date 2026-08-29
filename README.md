@@ -364,82 +364,38 @@ bit-identical to quantising in process.
 
 ### What quantisation does *not* buy: speed
 
-At 768x1024 the model runs 805 tokens through 8B parameters every step. That is
-a compute-bound GEMM, not the bandwidth-bound single-token decode that makes
-quantisation fast for LLMs, so there is nothing to win. Measured back-to-back
-and interleaved, bf16 and 4-bit are within a few percent of each other, in both
-directions depending on what else the machine is doing.
-
-Those timings were taken while the machine was also serving an unrelated LLM,
-so they are only good enough to support "no meaningful difference" — not to
-rank the configs. **Memory is the reason to quantise here, not latency.**
-
-## Milestone 8: the edit path, and the bug that was not mine
-
-The vision tower ported cleanly (exact stage by stage on CPU; see
-`tests/test_vision.py`). The preprocessing took longer, and finding out why was
-the useful part.
-
-### One uint8 level moves the embeddings by 5%
-
-A reference image is resized three times before the model sees it — bicubic to
-a patch-aligned box, **PIL lanczos** for the ViT branch, bilinear inside the
-Qwen2-VL processor — and the lanczos step round-trips through uint8. mdream's
-bicubic accumulates in float64 and is *more* accurate than torch's float32, so
-6.8% of pixels landed on the other side of that rounding boundary. Not a bug,
-and it would normally not matter. It matters here:
+Measured properly — warm, best of two, both precisions in the same session, and
+for the edit path interleaved round by round so drift cannot favour either:
 
 ```
-  input perturbation      cos(embeddings)
-        1e-5                 0.999966
-        1e-4                 0.999325
-        1e-3                 0.994416
-     7.8e-3 (= 1 level)      0.927808
+text-to-image, 28 steps, cfg 1.0            bf16 s/step   6-bit s/step
+   768x1024   0.79 MP    768 tokens             0.266        0.438
+  1024x1024   1.05 MP   1024 tokens             0.365        0.578
+  1152x1536   1.77 MP   1728 tokens             0.627        0.963
+  1536x2048   3.15 MP   3072 tokens             1.301        1.972
+  2048x2048   4.19 MP   4096 tokens             2.011        2.928
+  peak memory                                  15.6 GiB     8.8 GiB
+
+edit 1152x1536, cfg 5.0, 4158 tokens, two forwards per step
+                                               6.21         6.71
 ```
 
-The tower is a high-gain feature extractor. mdream's tower against ComfyUI's on
-*identical* pixels is cos 1.0000002 — but feed it pixels one uint8 level apart
-and the embeddings move 5%. So `prepare_ref_images(match_comfy=True)` routes
-the two interpolations through torch and reproduces ComfyUI's inputs
-bit-for-bit; `tests/test_refimg.py` then matches every tensor exactly, integers
-and floats alike.
+**6-bit is 1.5x slower on text-to-image and 1.08x slower on editing. It never
+wins on speed.** What it wins is peak memory, 15.6 GiB against 8.8.
 
-### The edit path collapses below ~1.7 megapixels
+The reason is the shape of the work, and it is worth stating because the LLM
+intuition points the wrong way. Decoding one token from an LLM is
+bandwidth-bound: every weight is read to produce one column, so halving the
+weights nearly halves the time. This model pushes 768–4096 tokens through 8B
+parameters on every step, which is a compute-bound GEMM — the weights are read
+once and reused across the whole batch, so shrinking them saves nothing and
+dequantising them costs.
 
-The first end-to-end edit came out as pure noise. Before touching the port, the
-control: **ComfyUI, same checkpoint, same sampler, same seed, same 768x1024
-canvas — also pure noise.** Then everything else was varied:
-
-```
-  768x1024 (0.79 MP), reference image, seed 42
-    dev,  euler,             cfg 1.0    pure noise
-    dev,  euler,             cfg 5.0    subject correct, background noise
-    dev,  dpmpp_2m,          cfg 5.0    subject correct, background noise
-    dev,  dpmpp_2m_sde_gpu,  cfg 5.0    pure noise
-    dev,  dpmpp_2m_sde + seam smoothing, 40 steps   background noise
-    base, dpmpp_2m,          cfg 5.0    background noise, face damaged
-  1152x1536 (1.77 MP)
-    dev,  dpmpp_2m,          cfg 5.0    clean
-```
-
-ComfyUI's own node says the model was trained at ~4 MP and that lower
-resolutions "regress noticeably". They do not regress; below ~1.7 MP the edit
-path collapses. Text-to-image at 768x1024 is fine — the failure is specific to
-carrying a reference image.
-
-mdream reproduces the collapse faithfully at 768x1024 and produces a clean,
-ComfyUI-matching edit at 1152x1536, which is what a correct port should do.
-`Generator.edit` warns below 1.7 MP.
-
-Two things the edit path needs that text-to-image does not:
-
-- **CFG.** cfg 1.0 is noise. The two velocity predictions are combined
-  directly, `v = v_uncond + (v_cond - v_uncond) * cfg`, which is identical to
-  ComfyUI combining the denoised predictions because `denoised = x - v*sigma`
-  is affine in `v`.
-- **DPM-Solver++(2M).** Euler leaves more background damage. The SDE variant
-  ComfyUI defaults to is *worse* here and is not ported: its Brownian-tree
-  noise is not reproducible without torchsde.
+An earlier version of this file said quantisation "starts paying at the edit
+path's 4158 tokens", from a 113.6 s 6-bit run against a 160.3 s bf16 run. Those
+two were forty minutes apart with different things on the machine. Interleaved,
+the ordering reverses. The lesson is the one this repo keeps relearning: two
+numbers measured at different times are not a comparison.
 
 ## Layout
 
