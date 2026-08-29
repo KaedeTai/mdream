@@ -130,7 +130,7 @@ before the next stage is written.
 3. one decoder layer — match hidden states (**done**, 1.09e-6 on CPU)
 4. full decoder, no vision — match hidden states at every layer (**done**, worst layer 2.8e-6)
 5. T2I conditioning — position ids, masks, ar_len (**done**, exact)
-6. full forward at one timestep, text only — match the velocity prediction
+6. full forward at one timestep, text only — match the velocity prediction (**done**, 8.9e-8)
 7. sampler — match the image at cfg 1.0, fixed seed
 8. vision tower — match image embeds (needed for the edit path, not for T2I)
 9. only then: quantise, and re-measure against the 40.1 s baseline
@@ -197,6 +197,7 @@ mdream/weights.py     checkpoint inspection and key -> module mapping
 mdream/layers.py      pixel shims: patch embed, final layer, timestep embed
 mdream/decoder.py     Qwen3-VL decoder: MRoPE, GQA attention, SwiGLU, two-pass mask
 mdream/conditioning.py  T2I sequence assembly and MRoPE position ids
+mdream/model.py       the assembled forward pass
 notes/reference.md    where the PyTorch reference lives, and what to read
 notes/precision.md    measured precision floors; where tolerances come from
 tests/test_shims.py          milestone 2 parity check
@@ -204,6 +205,8 @@ tests/test_decoder_layer.py  milestone 3, against ComfyUI's own TransformerBlock
 tests/test_two_pass.py       milestone 4a, attention boundary and prefix isolation
 tests/test_decoder_full.py   milestone 4b, all 36 layers streamed one at a time
 tests/test_conditioning.py   milestone 5, exact match on sequence assembly
+tests/test_forward.py        milestone 6, whole forward on a small synthetic model
+tests/test_forward_real.py   milestone 6b, real 8B weights load where they belong
 ```
 
 ## Reference
