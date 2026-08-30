@@ -17,8 +17,8 @@ bf16. See milestone 9.
 Multi-reference works: two images (a person and a garment) fuse correctly, and
 the K=2 conditioning is bit-identical to ComfyUI's.
 
-Not done: the SDE samplers, and the prefix KV cache the reference keeps across
-sampling steps — measured as worth about 4%, see below.
+Deliberately not done: the SDE samplers and the prefix KV cache. Both are
+argued below rather than left as a TODO.
 
 ```
 $ python3 scripts/generate.py "a red fox in fresh snow, golden hour" \
@@ -80,10 +80,21 @@ Quantisation exists (`--bits 6 --save-quantized q6.safetensors`) but bf16 is
 the better default on any machine that fits it, and there is no published
 quantised checkpoint on purpose — see milestone 9.
 
-Editing has three hard requirements, all of them the model's and not this
-port's: **cfg must be above 1**, the canvas must be **at least ~1.7 MP**, and
-anything involving **skin needs the `base` checkpoint, not `dev`**. `scripts/edit.py`
-defaults to base for that reason. See milestone 8 below.
+### The five rules, all of them the model's and none of them this port's
+
+Every one of these was found by running ComfyUI as a control and watching it
+fail the same way. They are the difference between this model being useless and
+being good.
+
+| | |
+|---|---|
+| **`base`, not `dev`, for anything with skin** | `dev` returns speckled, crazed faces. Nothing rescues it — not 4 MP, not lower cfg, not seam smoothing. `dev` is fine for text-to-image below ~2 MP. |
+| **cfg > 1 when editing** | At cfg 1.0 the edit path returns pure noise. `base` wants cfg 5 even for text-to-image. |
+| **≥ ~1.7 MP when editing** | Below that the edit path does not degrade, it collapses. 768x1024 is noise; 1152x1536 is clean. |
+| **source ≥ canvas when editing** | The model reproduces the source's detail at the new scale rather than inventing more, so a small source stretched to a big canvas comes out flat. |
+| **seam smoothing on for skin** | The 32px patch grid is visible on faces and flat sky. On by default for editing. |
+
+`scripts/edit.py` defaults to base with seam smoothing, and warns below 1.7 MP.
 
 ## Why this exists
 
@@ -526,6 +537,17 @@ End to end, a person plus a garment fuses correctly — face, cap, background an
 framing preserved, the garment transferred with its collar, pockets and
 buttons. 1152x1536, two references, 4683 tokens, cfg 5, 28 steps: 407 s.
 
+### Two things deliberately left out
+
+**The SDE samplers.** ComfyUI's `dpmpp_2m_sde_gpu` draws its noise from a
+`BrownianTreeNoiseSampler`, which needs `torchsde`. A port could implement a
+correct SDE sampler, but not *that* sampler — the Brownian tree's sequence is
+not reproducible — so it would be the one piece of this repo that could never
+be checked against the reference numerically, only by eye. Against that, it was
+measured **worse** than `dpmpp_2m` at 1152x1536 (it returned pure noise where
+`dpmpp_2m` gave a clean subject). Its value is confined to the ~4 MP workflows
+it was tuned for. Not worth trading the verification discipline for.
+
 ### The prefix KV cache, and why it is not built
 
 The reference caches the autoregressive prefix's K/V across sampling steps,
@@ -541,8 +563,7 @@ being written:
 
 The prefix is a small share of the sequence, and caching it only removes the
 q/k/v projections for those positions — attention still runs over everything.
-Call it 2-4% of wall clock. Worth having eventually; not worth having before
-the SDE samplers.
+Call it 2-4% of wall clock. Recorded rather than implemented.
 
 ## Layout
 
