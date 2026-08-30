@@ -34,6 +34,11 @@ from comfy.ldm.hidream_o1.conditioning import build_extra_conds  # noqa: E402
 # not its content, so use something that is not square and not tiny.
 IMG = Path(os.environ["MDREAM_REF_IMAGE"]).expanduser() \
     if "MDREAM_REF_IMAGE" in os.environ else None
+# A second, differently-shaped image exercises the multi-reference path, where
+# ref_max_size and cond_image_size both change with K and every per-image grid
+# has to line up independently.
+IMG2 = Path(os.environ["MDREAM_REF_IMAGE2"]).expanduser() \
+    if "MDREAM_REF_IMAGE2" in os.environ else None
 PROMPT = "make the sweater dark green and keep everything else identical"
 H, W = 1024, 768
 
@@ -52,10 +57,16 @@ def main() -> int:
     print(f"  reference image {img.shape[1]}x{img.shape[0]}, target {W}x{H}, "
           f"{ids.shape[1]} text tokens")
 
-    mine = build_edit_conds(ids, H, W, [img], match_comfy=True)
+    refs = [img]
+    if IMG2 is not None and IMG2.exists():
+        refs.append(load(IMG2))
+    print(f"  {len(refs)} reference image(s): " +
+          ", ".join(f"{r.shape[1]}x{r.shape[0]}" for r in refs))
+
+    mine = build_edit_conds(ids, H, W, refs, match_comfy=True)
 
     noise = torch.zeros(1, 3, H, W)
-    ref_t = [torch.from_numpy(img)[None]]
+    ref_t = [torch.from_numpy(r)[None] for r in refs]
     ref = build_extra_conds(torch.from_numpy(ids), noise, ref_images=ref_t,
                             target_patch_size=32)
 
@@ -98,8 +109,8 @@ def main() -> int:
     close("ref_pixel_values", mine["ref_pixel_values"], ref["ref_pixel_values"][0], 1e-12)
 
     n_pad = int((mine["input_ids"][0] == 151655).sum())
-    g = mine["ref_image_grid_thw"][0]
-    n_vit = (int(g[1]) // 2) * (int(g[2]) // 2)
+    n_vit = sum((int(g[1]) // 2) * (int(g[2]) // 2)
+                for g in mine["ref_image_grid_thw"])
     match = n_pad == n_vit
     ok &= match
     print(f"  {'OK ' if match else 'BAD'} {'image_pad == ViT count':<24} "

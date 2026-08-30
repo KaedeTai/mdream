@@ -14,8 +14,11 @@ Quantisation: works (6-bit is visually indistinguishable at 6.49 GiB against
 and the memory it saves is only worth having on a machine that cannot hold
 bf16. See milestone 9.
 
+Multi-reference works: two images (a person and a garment) fuse correctly, and
+the K=2 conditioning is bit-identical to ComfyUI's.
+
 Not done: the SDE samplers, and the prefix KV cache the reference keeps across
-sampling steps.
+sampling steps — measured as worth about 4%, see below.
 
 ```
 $ python3 scripts/generate.py "a red fox in fresh snow, golden hour" \
@@ -508,6 +511,38 @@ So the practical rule for editing is **give it a source at least as large as
 the canvas you ask for**. With the edit path also needing ~1.7 MP, a 768x1024
 photograph is in the worst position available: too small to edit at its own
 size, and stretched 1.5x if you go bigger.
+
+### Multi-reference
+
+`prepare_ref_images` takes K images and both `ref_max_size` and
+`cond_image_size` change with K, so every per-image grid has to line up
+independently — the kind of code that is written once and quietly wrong.
+`tests/test_refimg.py` takes `MDREAM_REF_IMAGE2` and checks K=2 the same way it
+checks K=1: input_ids, position_ids, masks and `ar_len` exact, `ref_patches`
+and `ref_pixel_values` bit-identical to ComfyUI, and the image-pad count
+matching the vision tower's output across both images.
+
+End to end, a person plus a garment fuses correctly — face, cap, background and
+framing preserved, the garment transferred with its collar, pockets and
+buttons. 1152x1536, two references, 4683 tokens, cfg 5, 28 steps: 407 s.
+
+### The prefix KV cache, and why it is not built
+
+The reference caches the autoregressive prefix's K/V across sampling steps,
+keyed on input_ids, position_ids and the reference images. It is the obvious
+missing optimisation here, and measuring what it could save is what stopped it
+being written:
+
+```
+  text-to-image  768x1024      24 prefix tokens of   792   3.0%
+  edit           1152x1536    175 prefix tokens of  4220   4.1%
+  edit, 2 refs   1152x1536    388 prefix tokens of  4683   8.3%
+```
+
+The prefix is a small share of the sequence, and caching it only removes the
+q/k/v projections for those positions — attention still runs over everything.
+Call it 2-4% of wall clock. Worth having eventually; not worth having before
+the SDE samplers.
 
 ## Layout
 
