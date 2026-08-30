@@ -484,14 +484,30 @@ same grid, keeps more texture, and costs half the passes. **On by default for
 editing** (`--seam off` to disable); off by default for text-to-image, whose
 grid is milder, where it is available as `--seam ramp_2_4`.
 
-Note the last row. Even with no smoothing at all the model puts out less than
-half the high-frequency energy of a real photograph (3.82 against 8.10), which
-is why its output reads as painted rather than photographed. That is structural:
-with no VAE, every pixel comes from a linear projection of one token into a
-32x32x3 patch, and a 4096-wide hidden state is a narrow channel for the
-noise-like micro-texture — grain, pores, subsurface variation — that a latent
-model gets for free from a decoder trained on photographs. Seam smoothing makes
-it slightly worse; it does not cause it.
+Note the last row with care — it is not what it looks like, and an earlier
+version of this file drew the wrong conclusion from it. Comparing per-pixel
+high-frequency energy across *different resolutions* is meaningless: the
+"photograph" is 768x1024 and the output is 1152x1536, and merely upscaling the
+photograph to the output's size drops it from 8.10 to 4.25. Against that
+baseline the model's 3.82 is ordinary, not a deficit.
+
+Measured properly, the model has no trouble with fine texture at all:
+
+```
+  text-to-image, 768x1024 native      21.25    (ComfyUI 21.31)
+  edit from a 1152x1536 source         9.36    source itself: 1.91
+  edit from a 768x1024 source          3.82    source upscaled to fit: 4.25
+```
+
+The middle row is the informative one: given a source at the target's own
+resolution, the model *adds* texture — 1.91 in, 9.36 out. It is only when the
+source is smaller than the target that output looks flat, because the model
+reproduces the source's detail at the new scale rather than inventing more.
+
+So the practical rule for editing is **give it a source at least as large as
+the canvas you ask for**. With the edit path also needing ~1.7 MP, a 768x1024
+photograph is in the worst position available: too small to edit at its own
+size, and stretched 1.5x if you go bigger.
 
 ## Layout
 
