@@ -9,7 +9,8 @@ canvas from the reference rather than compositing.
 Runs u2net_human_seg directly through onnxruntime; no rembg install needed,
 the weights are already cached in ~/.u2net.
 
-    python3 tools/cutout.py in.png -o out.png --white out_white.png
+    cutout photo.png --white
+    cutout photo.png -o mask.png --model u2net_human_seg
 """
 from __future__ import annotations
 
@@ -69,8 +70,11 @@ def stretch(pred: np.ndarray, lo: float = 0.05, hi: float = 0.95) -> np.ndarray:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
-    ap.add_argument("-o", "--out", default="cutout.png", help="RGBA with alpha")
-    ap.add_argument("--white", default=None, help="also write a white-backed version")
+    ap.add_argument("-o", "--out", default=None,
+                    help="RGBA output (default: <input>_cutout.png beside the input)")
+    ap.add_argument("--white", nargs="?", const="__auto__", default=None,
+                    help="also write a white-backed version; bare flag names it "
+                         "<input>_white.png")
     ap.add_argument("--model", default="isnet-general-use",
                     choices=list(CONFIG),
                     help="isnet runs at 1024x1024 and gives much crisper edges; "
@@ -80,6 +84,13 @@ def main() -> int:
     ap.add_argument("--lo", type=float, default=0.05)
     ap.add_argument("--hi", type=float, default=0.95)
     a = ap.parse_args()
+
+    src = Path(a.image)
+    # Derived defaults, so `cutout photo.png --white` needs no other arguments.
+    if a.out is None:
+        a.out = str(src.with_name(src.stem + "_cutout.png"))
+    if a.white == "__auto__":
+        a.white = str(src.with_name(src.stem + "_white.png"))
 
     img = Image.open(a.image).convert("RGB")
     t0 = time.time()

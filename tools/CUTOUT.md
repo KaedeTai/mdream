@@ -24,14 +24,22 @@
 
 `onnxruntime` 已經在 `~/.venv`，權重也已經在 `~/.u2net/`（rembg 的快取目錄，之前某個工具下載的）。**不需要裝 rembg。**
 
+已安裝成 `~/bin/cutout`（`~/bin` 本來就在 PATH 上），任何目錄都能直接叫：
+
 ```bash
-~/.venv/bin/python ~/repos/mdream/tools/cutout.py in.png \
-    -o out_rgba.png --white out_white.png
+cutout photo.png --white        # → photo_cutout.png（透明）+ photo_white.png（白底）
+cutout photo.png -o mask.png
+cutout photo.png --model u2net_human_seg
 ```
 
-- `-o` 輸出 RGBA（透明背景）
-- `--white` 另外輸出一張白底合成版
+- 不給 `-o` 就輸出到輸入檔旁邊，命名 `<檔名>_cutout.png`
+- `--white` 單獨加就好，會自動命名 `<檔名>_white.png`；也可以 `--white 路徑` 指定
 - `--model` 換模型，預設 `isnet-general-use`
+- `--raw-alpha` / `--lo` / `--hi` 調 alpha 拉伸（見下）
+
+`~/bin/cutout` 只是個 wrapper，實際跑的是 `~/repos/mdream/tools/cutout.py`，
+而且寫死用 `~/.venv/bin/python`（onnxruntime 裝在那裡），所以你當下 active 哪個
+venv 都不影響。改 repo 裡的 .py 會立刻生效。
 
 ## 模型檔
 
