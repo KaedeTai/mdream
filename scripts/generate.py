@@ -26,6 +26,9 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=1024)
     ap.add_argument("--steps", type=int, default=28)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cfg", type=float, default=1.0,
+                    help="1.0 for the dev checkpoint; the base checkpoint wants 5.0")
+    ap.add_argument("--negative", default="")
     ap.add_argument("--ckpt", default=str(DEFAULT_CKPT))
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
     ap.add_argument("--sigmas", default=None,
@@ -63,7 +66,7 @@ def main() -> int:
 
     img, latent = g.generate(
         a.prompt, width=a.width, height=a.height, steps=a.steps, seed=a.seed,
-        seam=a.seam,
+        cfg=a.cfg, negative_prompt=a.negative, seam=a.seam,
         sigmas=np.load(a.sigmas) if a.sigmas else None,
         noise=np.load(a.noise) if a.noise else None,
         return_latent=True,

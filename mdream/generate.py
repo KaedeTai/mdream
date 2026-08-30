@@ -117,6 +117,7 @@ class Generator:
 
     def generate(self, prompt: str, width: int = 1024, height: int = 1024,
                  steps: int = 28, seed: int = 0,
+                 cfg: float = 1.0, negative_prompt: str = "",
                  seam: Optional[str] = None, seam_start: float = 0.8,
                  sigmas: Optional[np.ndarray] = None,
                  noise: Optional[np.ndarray] = None,
@@ -125,6 +126,13 @@ class Generator:
 
         ids = self.tokenizer.encode(prompt)
         conds = build_t2i_conds(ids, height, width)
+        # The base checkpoint needs cfg 5 even for text-to-image; the distilled
+        # dev one is built for cfg 1. Without this the base variant is unusable
+        # here, which matters because dev's skin breaks down above ~2 MP.
+        unc = None
+        if not math.isclose(cfg, 1.0):
+            unc = build_t2i_conds(self.tokenizer.encode(negative_prompt),
+                                  height, width)
         if sigmas is None:
             sigmas = S.normal_schedule(self.model_sampling, steps)
         if noise is None:
@@ -150,10 +158,22 @@ class Generator:
         t_start = time.time()
         step_times = []
 
+        if unc is not None:
+            unc_ids = mx.array(unc["input_ids"])
+            unc_pos = mx.array(unc["position_ids"])
+            unc_cache = self.model.prepare(
+                unc_pos, mx.array(unc["vinput_mask"]), unc["ar_len"],
+                unc["image_len"], unc["input_ids"].shape[1] + unc["image_len"],
+                self.dtype)
+
         def net(xc, sigma, i):
             t = mx.array([sigma * self.model_sampling.multiplier], dtype=mx.float32)
             v = self.model(xc, t, ids_mx, pos_mx, None, conds["ar_len"],
                            compute_dtype=self.dtype, cache=cache)
+            if unc is not None:
+                vu = self.model(xc, t, unc_ids, unc_pos, None, unc["ar_len"],
+                                compute_dtype=self.dtype, cache=unc_cache)
+                v = vu + (v - vu) * cfg
             mx.eval(v)
             return v
 
