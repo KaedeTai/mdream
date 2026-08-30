@@ -85,7 +85,18 @@ def main() -> int:
     ap.add_argument("--hi", type=float, default=0.95)
     a = ap.parse_args()
 
-    src = Path(a.image)
+    src = Path(a.image).expanduser()
+    if not src.exists():
+        print(f"cutout: no such file: {src}")
+        return 1
+    missing = [m for m in ([a.model] if a.model else []) 
+               if not (MODELS / f"{m}.onnx").exists()]
+    if missing:
+        print(f"cutout: model weights not found: {MODELS}/{missing[0]}.onnx\n"
+              f"        download from https://github.com/danielgatis/rembg "
+              f"(the release assets), or pick another --model")
+        return 1
+    a.image = str(src)
     # Derived defaults, so `cutout photo.png --white` needs no other arguments.
     if a.out is None:
         a.out = str(src.with_name(src.stem + "_cutout.png"))
